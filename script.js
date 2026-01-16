@@ -14,6 +14,7 @@ let player = {
     y: 0, // グリッド上のY座標
     color: '#FFFFFF'
 };
+let needsRedraw = true;
 
 // 初期化
 function init() {
@@ -63,12 +64,15 @@ function handleInput(e) {
         case 'ArrowRight':
             nextX++;
             break;
+        default:
+            return; // Ignore other keys
     }
 
     // 画面外に出ないように制限
     if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
         player.x = nextX;
         player.y = nextY;
+        needsRedraw = true;
     }
 }
 
@@ -107,7 +111,10 @@ function draw() {
 
 // ゲームループ
 function gameLoop() {
-    draw();
+    if (needsRedraw) {
+        draw();
+        needsRedraw = false;
+    }
     requestAnimationFrame(gameLoop);
 }
 
