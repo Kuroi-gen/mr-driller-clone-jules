@@ -6,12 +6,15 @@ const COLS = 15;
 const ROWS = 20;
 const BLOCK_SIZE = 32; // 480 / 15 = 32
 const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
+const GRAVITY_INTERVAL = 10; // 重力の更新間隔（フレーム数）
 
 // ゲームの状態
+let frameCount = 0;
 let grid = [];
 let player = {
     x: 7, // グリッド上のX座標
     y: 0, // グリッド上のY座標
+    direction: 'down', // 向き
     color: '#FFFFFF'
 };
 
@@ -49,26 +52,62 @@ function init() {
 function handleInput(e) {
     let nextX = player.x;
     let nextY = player.y;
+    let moved = false;
 
     switch(e.key) {
         case 'ArrowUp':
+            player.direction = 'up';
             nextY--;
+            moved = true;
             break;
         case 'ArrowDown':
+            player.direction = 'down';
             nextY++;
+            moved = true;
             break;
         case 'ArrowLeft':
+            player.direction = 'left';
             nextX--;
+            moved = true;
             break;
         case 'ArrowRight':
+            player.direction = 'right';
             nextX++;
+            moved = true;
+            break;
+        case ' ':
+            dig();
             break;
     }
 
-    // 画面外に出ないように制限
-    if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
-        player.x = nextX;
-        player.y = nextY;
+    if (moved) {
+        // 画面外に出ないように制限
+        if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
+            // 移動先が空(null)の場合のみ移動可能
+            if (!grid[nextY][nextX]) {
+                player.x = nextX;
+                player.y = nextY;
+            }
+        }
+    }
+}
+
+// ブロックを掘る
+function dig() {
+    let targetX = player.x;
+    let targetY = player.y;
+
+    switch(player.direction) {
+        case 'up': targetY--; break;
+        case 'down': targetY++; break;
+        case 'left': targetX--; break;
+        case 'right': targetX++; break;
+    }
+
+    if (targetX >= 0 && targetX < COLS && targetY >= 0 && targetY < ROWS) {
+        if (grid[targetY][targetX]) {
+            grid[targetY][targetX] = null;
+        }
     }
 }
 
@@ -97,16 +136,67 @@ function draw() {
     ctx.fillStyle = player.color;
     // プレイヤーを少し小さく描画して見やすくする
     const playerPadding = 4;
-    ctx.fillRect(
-        player.x * BLOCK_SIZE + playerPadding,
-        player.y * BLOCK_SIZE + playerPadding,
-        BLOCK_SIZE - playerPadding * 2,
-        BLOCK_SIZE - playerPadding * 2
-    );
+    const px = player.x * BLOCK_SIZE + playerPadding;
+    const py = player.y * BLOCK_SIZE + playerPadding;
+    const pSize = BLOCK_SIZE - playerPadding * 2;
+
+    ctx.fillRect(px, py, pSize, pSize);
+
+    // 向きを表示
+    ctx.fillStyle = '#000';
+    const eyeSize = 4;
+    let eyeX = px + pSize / 2 - eyeSize / 2;
+    let eyeY = py + pSize / 2 - eyeSize / 2;
+
+    switch(player.direction) {
+        case 'up': eyeY -= 8; break;
+        case 'down': eyeY += 8; break;
+        case 'left': eyeX -= 8; break;
+        case 'right': eyeX += 8; break;
+    }
+    ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
+}
+
+// 更新処理
+function update() {
+    frameCount++;
+    if (frameCount >= GRAVITY_INTERVAL) {
+        updatePlayerGravity();
+        updateBlockGravity();
+        frameCount = 0;
+    }
+}
+
+// プレイヤーの重力処理
+function updatePlayerGravity() {
+    // 地面より上にいて、下が空(null)なら落下
+    if (player.y < ROWS - 1) {
+        if (!grid[player.y + 1][player.x]) {
+            player.y++;
+        }
+    }
+}
+
+// ブロックの重力処理
+function updateBlockGravity() {
+    // 下から上へ走査（落ちる処理のため）
+    for (let x = 0; x < COLS; x++) {
+        for (let y = ROWS - 2; y >= 0; y--) {
+            const block = grid[y][x];
+            if (block) {
+                // 下が空で、かつプレイヤーがその下にいなければ落下
+                if (!grid[y + 1][x] && !(player.x === x && player.y === y + 1)) {
+                    grid[y + 1][x] = block;
+                    grid[y][x] = null;
+                }
+            }
+        }
+    }
 }
 
 // ゲームループ
 function gameLoop() {
+    update();
     draw();
     requestAnimationFrame(gameLoop);
 }
