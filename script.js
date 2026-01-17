@@ -17,6 +17,7 @@ let player = {
     direction: 'down', // 向き
     color: '#FFFFFF'
 };
+let needsRedraw = true;
 
 // 初期化
 function init() {
@@ -144,6 +145,8 @@ function handleInput(e) {
         case ' ':
             processInput('dig');
             break;
+        default:
+            return; // Ignore other keys
     }
 }
 
@@ -152,6 +155,11 @@ function dig() {
     let targetX = player.x;
     let targetY = player.y;
 
+    // 画面外に出ないように制限
+    if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
+        player.x = nextX;
+        player.y = nextY;
+        needsRedraw = true;
     switch(player.direction) {
         case 'up': targetY--; break;
         case 'down': targetY++; break;
@@ -344,6 +352,10 @@ function checkMatches() {
 
 // ゲームループ
 function gameLoop() {
+    if (needsRedraw) {
+        draw();
+        needsRedraw = false;
+    }
     update();
     draw();
     requestAnimationFrame(gameLoop);
