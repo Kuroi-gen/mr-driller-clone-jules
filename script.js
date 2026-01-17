@@ -8,6 +8,11 @@ const BLOCK_SIZE = 32; // 480 / 15 = 32
 const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
 const GRAVITY_INTERVAL = 10; // 重力の更新間隔（フレーム数）
 
+// AIRシステム定数
+const MAX_AIR = 100;
+const AIR_DECREASE_RATE = 0.03; // 1フレームあたりの減少量（60fpsなら1秒で約1.8%減少）
+const AIR_CAPSULE_CHANCE = 0.05; // AIRカプセルの出現確率
+
 // ゲームの状態
 let frameCount = 0;
 let grid = [];
@@ -18,9 +23,14 @@ let player = {
     color: '#FFFFFF'
 };
 let needsRedraw = true;
+let air = MAX_AIR;
+let isGameOver = false;
 
 // 初期化
 function init() {
+    air = MAX_AIR;
+    isGameOver = false;
+
     // グリッドをランダムな色で埋める
     for (let y = 0; y < ROWS; y++) {
         let row = [];
@@ -29,8 +39,12 @@ function init() {
             if (x === player.x && y === player.y) {
                 row.push(null);
             } else {
-                const color = COLORS[Math.floor(Math.random() * COLORS.length)];
-                row.push({ color: color, state: 'normal', timer: 0 });
+                if (Math.random() < AIR_CAPSULE_CHANCE) {
+                    row.push({ type: 'air', state: 'normal', timer: 0 });
+                } else {
+                    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+                    row.push({ type: 'block', color: color, state: 'normal', timer: 0 });
+                }
             }
         }
         grid.push(row);
@@ -73,6 +87,8 @@ function setupTouchControls() {
 
 // 入力処理共通化
 function processInput(action) {
+    if (isGameOver) return;
+
     let nextX = player.x;
     let nextY = player.y;
     let moved = false;
@@ -109,8 +125,16 @@ function processInput(action) {
         needsRedraw = true; // 向き変更または移動のため再描画
         // 画面外に出ないように制限
         if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
-            // 移動先が空(null)の場合のみ移動可能
-            if (!grid[nextY][nextX]) {
+            const targetBlock = grid[nextY][nextX];
+
+            // 移動先が空(null)またはAIRカプセルの場合移動可能
+            if (!targetBlock || targetBlock.type === 'air') {
+                // AIRカプセルなら取得
+                if (targetBlock && targetBlock.type === 'air') {
+                    grid[nextY][nextX] = null;
+                    air = Math.min(air + 20, MAX_AIR);
+                }
+
                 player.x = nextX;
                 player.y = nextY;
             }
@@ -120,6 +144,7 @@ function processInput(action) {
 
 // キーボード入力処理
 function handleInput(e) {
+    if (isGameOver) return;
     switch(e.key) {
         case 'ArrowUp':
             processInput('up');
@@ -167,6 +192,8 @@ function draw() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // --- ゲームエリア描画 ---
+
     // ブロックの描画
     for (let y = 0; y < ROWS; y++) {
         for (let x = 0; x < COLS; x++) {
@@ -190,8 +217,21 @@ function draw() {
                     }
                 }
 
-                ctx.fillStyle = block.color;
-                ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                if (block.type === 'air') {
+                    // AIRカプセル描画
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
+
+                    ctx.fillStyle = '#0000FF';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('AIR', drawX + drawSize/2, drawY + drawSize/2);
+                } else {
+                    // 通常ブロック
+                    ctx.fillStyle = block.color;
+                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                }
 
                 ctx.strokeStyle = '#222';
                 ctx.strokeRect(drawX, drawY, drawSize, drawSize);
@@ -224,10 +264,85 @@ function draw() {
         case 'right': eyeX += 8; break;
     }
     ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
+
+    // --- UI描画 (右側エリア) ---
+    const uiX = 480;
+    const uiWidth = 100;
+
+    // UI背景（念のため）
+    ctx.fillStyle = '#222';
+    ctx.fillRect(uiX, 0, uiWidth, canvas.height);
+
+    // AIRゲージ枠
+    const gaugeX = uiX + 20;
+    const gaugeY = 50;
+    const gaugeW = 30;
+    const gaugeH = 300;
+
+    ctx.strokeStyle = '#FFF';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(gaugeX, gaugeY, gaugeW, gaugeH);
+
+    // AIRラベル
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('AIR', gaugeX + gaugeW/2, gaugeY - 10);
+
+    // AIR残量バー
+    const airHeight = (air / MAX_AIR) * gaugeH;
+    const airY = gaugeY + (gaugeH - airHeight);
+
+    if (air <= 20) {
+        // 点滅させるか赤くする
+        if (Math.floor(Date.now() / 200) % 2 === 0) {
+            ctx.fillStyle = '#FF0000';
+        } else {
+             ctx.fillStyle = '#880000';
+        }
+    } else {
+        ctx.fillStyle = '#00FFFF';
+    }
+    ctx.fillRect(gaugeX + 1, airY, gaugeW - 2, airHeight);
+
+    // 数値表示
+    ctx.fillStyle = '#FFF';
+    ctx.fillText(Math.floor(air) + '%', gaugeX + gaugeW/2, gaugeY + gaugeH + 20);
+
+    // ゲームオーバー表示
+    if (isGameOver) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#FF0000';
+        ctx.font = 'bold 40px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+    }
 }
 
 // 更新処理
 function update() {
+    if (isGameOver) return;
+
+    // AIR減少
+    if (air > 0) {
+        air -= AIR_DECREASE_RATE;
+        if (air <= 0) {
+            air = 0;
+            isGameOver = true;
+            needsRedraw = true;
+        } else {
+             // ゲージ更新のために頻繁に再描画が必要だが、
+             // フレーム毎だと重いかもしれないので一定間隔か、あるいはUI部分だけならOK
+             // ここではneedsRedrawを立てるかどうか検討
+             // AIRバーの変化を見せるため、例えば10フレームに1回再描画するか、
+             // そもそもAIR_DECREASE_RATEが小さいので、値が1変わるごとに描画でもよい
+             // 簡易的に毎回描画リクエストする（描画負荷は低いので）
+             needsRedraw = true;
+        }
+    }
+
     updateClearingBlocks();
 
     frameCount++;
@@ -308,10 +423,12 @@ function checkMatches() {
 
     for (let y = 0; y < ROWS; y++) {
         for (let x = 0; x < COLS; x++) {
-            if (!grid[y][x] || visited[y][x] || grid[y][x].state === 'clearing') continue;
+            const block = grid[y][x];
+            // AIRカプセルはマッチング対象外
+            if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air') continue;
 
             let group = [];
-            let color = grid[y][x].color;
+            let color = block.color;
             let stack = [{x, y}];
             visited[y][x] = true;
             group.push({x, y});
@@ -326,9 +443,11 @@ function checkMatches() {
                     let ny = current.y + d[1];
 
                     if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
-                        if (!visited[ny][nx] && grid[ny][nx] &&
-                            grid[ny][nx].color === color &&
-                            grid[ny][nx].state !== 'clearing') {
+                        const nextBlock = grid[ny][nx];
+                        if (!visited[ny][nx] && nextBlock &&
+                            nextBlock.color === color &&
+                            nextBlock.state !== 'clearing' &&
+                            nextBlock.type !== 'air') {
 
                             visited[ny][nx] = true;
                             group.push({x: nx, y: ny});
