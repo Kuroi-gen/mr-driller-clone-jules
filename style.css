@@ -1,17 +1,91 @@
 body {
     background-color: #333;
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
-    height: 100vh;
+    min-height: 100vh;
     margin: 0;
+    touch-action: manipulation; /* Prevent double-tap zoom */
 }
 
 #game-container {
     box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    margin-bottom: 20px;
+    max-width: 100%;
 }
 
 canvas {
     background-color: #000;
     display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+#controls {
+    display: flex;
+    gap: 40px;
+    align-items: center;
+    padding: 10px;
+}
+
+#dpad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+
+.dpad-row {
+    display: flex;
+    gap: 5px;
+}
+
+.control-btn {
+    width: 60px;
+    height: 60px;
+    border: none;
+    border-radius: 10px;
+    background-color: #555;
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none; /* Safari */
+    touch-action: manipulation;
+}
+
+.control-btn:active {
+    background-color: #777;
+    transform: scale(0.95);
+}
+
+.big-btn {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background-color: #d32f2f;
+    font-size: 20px;
+}
+
+.big-btn:active {
+    background-color: #f44336;
+}
+
+@media (max-width: 600px) {
+    #controls {
+        gap: 20px;
+    }
+
+    .control-btn {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+    }
+
+    .big-btn {
+        width: 80px;
+        height: 80px;
+    }
 }

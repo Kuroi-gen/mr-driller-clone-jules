@@ -44,39 +44,73 @@ function init() {
     // キーボード入力の監視
     document.addEventListener('keydown', handleInput);
 
+    // タッチボタンの監視
+    setupTouchControls();
+
     // ゲームループ開始
     requestAnimationFrame(gameLoop);
 }
 
-// 入力処理
-function handleInput(e) {
+// タッチコントロール設定
+function setupTouchControls() {
+    const bindButton = (id, action) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+
+        // タッチイベントの遅延を防ぐためtouchstartを使用
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // デフォルトの動作（スクロールなど）を防ぐ
+            processInput(action);
+        }, { passive: false });
+
+        // PCでのクリックテスト用
+        btn.addEventListener('click', (e) => {
+             // touchstartで処理済みの場合は重複実行しないようにする
+             // ただし、単純な実装ではPCクリックとスマホタップを区別しにくいが、
+             // e.preventDefault()しているのでclickは発火しないはず（スマホの場合）。
+             // PCの場合はclickが発火する。
+             processInput(action);
+        });
+    };
+
+    bindButton('btn-up', 'up');
+    bindButton('btn-down', 'down');
+    bindButton('btn-left', 'left');
+    bindButton('btn-right', 'right');
+    bindButton('btn-dig', 'dig');
+}
+
+// 入力処理共通化
+function processInput(action) {
     let nextX = player.x;
     let nextY = player.y;
     let moved = false;
 
-    switch(e.key) {
-        case 'ArrowUp':
+    if (action === 'dig') {
+        dig();
+        return;
+    }
+
+    switch(action) {
+        case 'up':
             player.direction = 'up';
             nextY--;
             moved = true;
             break;
-        case 'ArrowDown':
+        case 'down':
             player.direction = 'down';
             nextY++;
             moved = true;
             break;
-        case 'ArrowLeft':
+        case 'left':
             player.direction = 'left';
             nextX--;
             moved = true;
             break;
-        case 'ArrowRight':
+        case 'right':
             player.direction = 'right';
             nextX++;
             moved = true;
-            break;
-        case ' ':
-            dig();
             break;
     }
 
@@ -89,6 +123,27 @@ function handleInput(e) {
                 player.y = nextY;
             }
         }
+    }
+}
+
+// キーボード入力処理
+function handleInput(e) {
+    switch(e.key) {
+        case 'ArrowUp':
+            processInput('up');
+            break;
+        case 'ArrowDown':
+            processInput('down');
+            break;
+        case 'ArrowLeft':
+            processInput('left');
+            break;
+        case 'ArrowRight':
+            processInput('right');
+            break;
+        case ' ':
+            processInput('dig');
+            break;
     }
 }
 
