@@ -25,12 +25,6 @@ function init() {
     for (let y = 0; y < ROWS; y++) {
         let row = [];
         for (let x = 0; x < COLS; x++) {
-            // 地面より下（y > 2）をブロックで埋める、など調整も可能だが、
-            // 今回は「敷き詰められた画面」という要望なので全体を埋める
-            // ただし、プレイヤーの初期位置付近は空けておくなどの配慮があってもいいが
-            // シンプルにランダムに埋める。プレイヤーと重なる部分は後で描画順で解決するか、
-            // プレイヤーがいる場所はブロックを置かないようにする。
-
             // とりあえずプレイヤーの初期位置だけ空にしておく
             if (x === player.x && y === player.y) {
                 row.push(null);
@@ -66,10 +60,6 @@ function setupTouchControls() {
 
         // PCでのクリックテスト用
         btn.addEventListener('click', (e) => {
-             // touchstartで処理済みの場合は重複実行しないようにする
-             // ただし、単純な実装ではPCクリックとスマホタップを区別しにくいが、
-             // e.preventDefault()しているのでclickは発火しないはず（スマホの場合）。
-             // PCの場合はclickが発火する。
              processInput(action);
         });
     };
@@ -116,6 +106,7 @@ function processInput(action) {
     }
 
     if (moved) {
+        needsRedraw = true; // 向き変更または移動のため再描画
         // 画面外に出ないように制限
         if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
             // 移動先が空(null)の場合のみ移動可能
@@ -155,11 +146,6 @@ function dig() {
     let targetX = player.x;
     let targetY = player.y;
 
-    // 画面外に出ないように制限
-    if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
-        player.x = nextX;
-        player.y = nextY;
-        needsRedraw = true;
     switch(player.direction) {
         case 'up': targetY--; break;
         case 'down': targetY++; break;
@@ -170,6 +156,7 @@ function dig() {
     if (targetX >= 0 && targetX < COLS && targetY >= 0 && targetY < ROWS) {
         if (grid[targetY][targetX]) {
             grid[targetY][targetX] = null;
+            needsRedraw = true;
         }
     }
 }
@@ -245,11 +232,15 @@ function update() {
 
     frameCount++;
     if (frameCount >= GRAVITY_INTERVAL) {
-        updatePlayerGravity();
-        const moved = updateBlockGravity();
+        const playerMoved = updatePlayerGravity();
+        const blocksMoved = updateBlockGravity();
+
+        if (playerMoved || blocksMoved) {
+            needsRedraw = true;
+        }
 
         // ブロックが動いていない（安定している）場合のみマッチ判定を行う
-        if (!moved) {
+        if (!blocksMoved) {
             checkMatches();
         }
 
@@ -263,8 +254,10 @@ function updatePlayerGravity() {
     if (player.y < ROWS - 1) {
         if (!grid[player.y + 1][player.x]) {
             player.y++;
+            return true;
         }
     }
+    return false;
 }
 
 // ブロックの重力処理
@@ -290,16 +283,22 @@ function updateBlockGravity() {
 
 // 消去アニメーションの更新
 function updateClearingBlocks() {
+    let animating = false;
     for (let y = 0; y < ROWS; y++) {
         for (let x = 0; x < COLS; x++) {
             const block = grid[y][x];
             if (block && block.state === 'clearing') {
+                animating = true;
                 block.timer--;
                 if (block.timer <= 0) {
                     grid[y][x] = null;
+                    needsRedraw = true; // 消えた
                 }
             }
         }
+    }
+    if (animating) {
+        needsRedraw = true;
     }
 }
 
@@ -345,6 +344,7 @@ function checkMatches() {
                     grid[b.y][b.x].state = 'clearing';
                     grid[b.y][b.x].timer = 15; // アニメーション時間（約0.25秒）
                 }
+                needsRedraw = true;
             }
         }
     }
@@ -357,7 +357,6 @@ function gameLoop() {
         needsRedraw = false;
     }
     update();
-    draw();
     requestAnimationFrame(gameLoop);
 }
 
