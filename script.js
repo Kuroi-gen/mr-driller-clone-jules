@@ -35,7 +35,7 @@ function init() {
                 row.push(null);
             } else {
                 const color = COLORS[Math.floor(Math.random() * COLORS.length)];
-                row.push({ color: color });
+                row.push({ color: color, state: 'normal', timer: 0 });
             }
         }
         grid.push(row);
@@ -122,12 +122,31 @@ function draw() {
         for (let x = 0; x < COLS; x++) {
             const block = grid[y][x];
             if (block) {
-                ctx.fillStyle = block.color;
-                ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                let drawSize = BLOCK_SIZE;
+                let drawX = x * BLOCK_SIZE;
+                let drawY = y * BLOCK_SIZE;
 
-                // ブロックの枠線（見やすくするため）
+                // 消去アニメーション
+                if (block.state === 'clearing') {
+                    const ratio = block.timer / 15; // 15は最大タイマー値
+                    drawSize = BLOCK_SIZE * ratio;
+                    const offset = (BLOCK_SIZE - drawSize) / 2;
+                    drawX += offset;
+                    drawY += offset;
+
+                    // 点滅効果
+                    if (block.timer % 4 < 2) {
+                        ctx.globalAlpha = 0.5;
+                    }
+                }
+
+                ctx.fillStyle = block.color;
+                ctx.fillRect(drawX, drawY, drawSize, drawSize);
+
                 ctx.strokeStyle = '#222';
-                ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+                ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+
+                ctx.globalAlpha = 1.0; // アルファ値をリセット
             }
         }
     }
@@ -159,10 +178,18 @@ function draw() {
 
 // 更新処理
 function update() {
+    updateClearingBlocks();
+
     frameCount++;
     if (frameCount >= GRAVITY_INTERVAL) {
         updatePlayerGravity();
-        updateBlockGravity();
+        const moved = updateBlockGravity();
+
+        // ブロックが動いていない（安定している）場合のみマッチ判定を行う
+        if (!moved) {
+            checkMatches();
+        }
+
         frameCount = 0;
     }
 }
@@ -179,15 +206,81 @@ function updatePlayerGravity() {
 
 // ブロックの重力処理
 function updateBlockGravity() {
+    let moved = false;
     // 下から上へ走査（落ちる処理のため）
     for (let x = 0; x < COLS; x++) {
         for (let y = ROWS - 2; y >= 0; y--) {
             const block = grid[y][x];
-            if (block) {
+            if (block && block.state !== 'clearing') {
                 // 下が空で、かつプレイヤーがその下にいなければ落下
+                // clearing状態のブロックの上には乗れる（消えるまでは実体がある扱いとする）
                 if (!grid[y + 1][x] && !(player.x === x && player.y === y + 1)) {
                     grid[y + 1][x] = block;
                     grid[y][x] = null;
+                    moved = true;
+                }
+            }
+        }
+    }
+    return moved;
+}
+
+// 消去アニメーションの更新
+function updateClearingBlocks() {
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const block = grid[y][x];
+            if (block && block.state === 'clearing') {
+                block.timer--;
+                if (block.timer <= 0) {
+                    grid[y][x] = null;
+                }
+            }
+        }
+    }
+}
+
+// 連結判定と消去処理
+function checkMatches() {
+    let visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
+
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            if (!grid[y][x] || visited[y][x] || grid[y][x].state === 'clearing') continue;
+
+            let group = [];
+            let color = grid[y][x].color;
+            let stack = [{x, y}];
+            visited[y][x] = true;
+            group.push({x, y});
+
+            // 深さ優先探索で連結ブロックを探す
+            while(stack.length > 0) {
+                let current = stack.pop();
+                const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+                for (let d of dirs) {
+                    let nx = current.x + d[0];
+                    let ny = current.y + d[1];
+
+                    if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
+                        if (!visited[ny][nx] && grid[ny][nx] &&
+                            grid[ny][nx].color === color &&
+                            grid[ny][nx].state !== 'clearing') {
+
+                            visited[ny][nx] = true;
+                            group.push({x: nx, y: ny});
+                            stack.push({x: nx, y: ny});
+                        }
+                    }
+                }
+            }
+
+            // 4つ以上連結していたら消去対象にする
+            if (group.length >= 4) {
+                for (let b of group) {
+                    grid[b.y][b.x].state = 'clearing';
+                    grid[b.y][b.x].timer = 15; // アニメーション時間（約0.25秒）
                 }
             }
         }
