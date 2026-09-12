@@ -186,6 +186,11 @@ function dig() {
     }
 }
 
+// 同色ブロック判定補助関数
+function isSameColorBlock(b, color) {
+    return b && b.type === 'block' && b.color === color && b.state !== 'clearing';
+}
+
 // 描画処理
 function draw() {
     // 背景クリア
@@ -227,14 +232,46 @@ function draw() {
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText('AIR', drawX + drawSize/2, drawY + drawSize/2);
+
+                    ctx.strokeStyle = '#222';
+                    ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                 } else {
                     // 通常ブロック
                     ctx.fillStyle = block.color;
                     ctx.fillRect(drawX, drawY, drawSize, drawSize);
-                }
 
-                ctx.strokeStyle = '#222';
-                ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                    if (block.state === 'clearing') {
+                        ctx.strokeStyle = '#222';
+                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                    } else {
+                        // 隣接する同色ブロックの有無を確認して外枠のみ描画（ブロック結合）
+                        const topConnected = y > 0 && isSameColorBlock(grid[y-1][x], block.color);
+                        const bottomConnected = y < ROWS - 1 && isSameColorBlock(grid[y+1][x], block.color);
+                        const leftConnected = x > 0 && isSameColorBlock(grid[y][x-1], block.color);
+                        const rightConnected = x < COLS - 1 && isSameColorBlock(grid[y][x+1], block.color);
+
+                        ctx.strokeStyle = '#222';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        if (!topConnected) {
+                            ctx.moveTo(drawX, drawY);
+                            ctx.lineTo(drawX + drawSize, drawY);
+                        }
+                        if (!bottomConnected) {
+                            ctx.moveTo(drawX, drawY + drawSize);
+                            ctx.lineTo(drawX + drawSize, drawY + drawSize);
+                        }
+                        if (!leftConnected) {
+                            ctx.moveTo(drawX, drawY);
+                            ctx.lineTo(drawX, drawY + drawSize);
+                        }
+                        if (!rightConnected) {
+                            ctx.moveTo(drawX + drawSize, drawY);
+                            ctx.lineTo(drawX + drawSize, drawY + drawSize);
+                        }
+                        ctx.stroke();
+                    }
+                }
 
                 ctx.globalAlpha = 1.0; // アルファ値をリセット
             }
@@ -383,12 +420,27 @@ function updateBlockGravity() {
         for (let y = ROWS - 2; y >= 0; y--) {
             const block = grid[y][x];
             if (block && block.state !== 'clearing') {
-                // 下が空で、かつプレイヤーがその下にいなければ落下
-                // clearing状態のブロックの上には乗れる（消えるまでは実体がある扱いとする）
-                if (!grid[y + 1][x] && !(player.x === x && player.y === y + 1)) {
-                    grid[y + 1][x] = block;
-                    grid[y][x] = null;
-                    moved = true;
+                // 下が空の場合に落下処理
+                if (!grid[y + 1][x]) {
+                    if (player.x === x && player.y === y + 1) {
+                        if (block.type === 'air') {
+                            // AIRカプセルの場合はプレイヤーが自動取得
+                            air = Math.min(air + 20, MAX_AIR);
+                            grid[y][x] = null;
+                            moved = true;
+                        } else {
+                            // 通常ブロックの場合はプレイヤー圧死（ゲームオーバー）
+                            grid[y + 1][x] = block;
+                            grid[y][x] = null;
+                            isGameOver = true;
+                            moved = true;
+                        }
+                    } else {
+                        // プレイヤーがいない場合は通常の落下
+                        grid[y + 1][x] = block;
+                        grid[y][x] = null;
+                        moved = true;
+                    }
                 }
             }
         }
