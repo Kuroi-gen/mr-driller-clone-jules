@@ -3,10 +3,10 @@ const ctx = canvas.getContext('2d');
 
 // 定数定義
 const COLS = 15;
-const ROWS = 500; // 500mの深さ
+const GOAL_DEPTH = 500; // ゴール深さ（メートル）
+const ROWS = GOAL_DEPTH + 1; // 0〜500mまでの行数（計501行）
 const VISIBLE_ROWS = 20; // 画面に表示する行数
 const BLOCK_SIZE = 32; // 480 / 15 = 32
-const GOAL_DEPTH = 500; // ゴール深さ（メートル）
 const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
 const PLAYER_GRAVITY_INTERVAL = 10; // プレイヤー重力の更新間隔
 const BLOCK_GRAVITY_INTERVAL = 16;  // ブロック重力の更新間隔
@@ -79,8 +79,8 @@ function startNewGame() {
             // プレイヤーの初期位置とその周辺（最上段の数マス）を空にする
             if (y === 0 && Math.abs(x - player.x) <= 1) {
                 row.push(null);
-            } else if (y === ROWS - 1) {
-                // 最下層はゴールライン表示用
+            } else if (y === GOAL_DEPTH) {
+                // GOAL_DEPTH (500m) はゴールライン表示用
                 row.push({ type: 'goal', color: '#FFD700', state: 'normal' });
             } else {
                 if (Math.random() < AIR_CAPSULE_CHANCE) {
@@ -217,8 +217,8 @@ function processInput(action) {
         if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
             const targetBlock = grid[nextY][nextX];
 
-            // ゴール判定
-            if (nextY >= GOAL_DEPTH - 1) {
+            // ゴール判定 (500m到達)
+            if (nextY >= GOAL_DEPTH) {
                 player.x = nextX;
                 player.y = nextY;
                 gameState = STATE_GAMECLEAR;
@@ -713,7 +713,7 @@ function updatePlayerGravity() {
     if (player.y < ROWS - 1) {
         if (!grid[player.y + 1][player.x]) {
             player.y++;
-            if (player.y >= GOAL_DEPTH - 1) {
+            if (player.y >= GOAL_DEPTH) {
                 gameState = STATE_GAMECLEAR;
                 stateChangeCooldown = 40;
             }
