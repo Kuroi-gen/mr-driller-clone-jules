@@ -412,31 +412,65 @@ function updatePlayerGravity() {
     return false;
 }
 
-// ブロックの重力処理
+// 結合ブロックのクラスター（連結成分）抽出関数
+function getClusters() {
+    let visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
+    let clusters = [];
+
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const block = grid[y][x];
+            if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air') continue;
+
+            let cluster = [];
+            let color = block.color;
+            let stack = [{x, y}];
+            visited[y][x] = true;
+
+            while (stack.length > 0) {
+                let current = stack.pop();
+                cluster.push(current);
+                const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+                for (let d of dirs) {
+                    let nx = current.x + d[0];
+                    let ny = current.y + d[1];
+
+                    if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
+                        const nextBlock = grid[ny][nx];
+                        if (!visited[ny][nx] && nextBlock &&
+                            nextBlock.type === 'block' &&
+                            nextBlock.color === color &&
+                            nextBlock.state !== 'clearing') {
+
+                            visited[ny][nx] = true;
+                            stack.push({x: nx, y: ny});
+                        }
+                    }
+                }
+            }
+            clusters.push(cluster);
+        }
+    }
+
+    return clusters;
+}
+
+// ブロックの重力処理（同色結合クラスター単位）
 function updateBlockGravity() {
     let moved = false;
-    // 下から上へ走査（落ちる処理のため）
+
+    // 1. AIRカプセルの重力処理（単体で落下）
     for (let x = 0; x < COLS; x++) {
         for (let y = ROWS - 2; y >= 0; y--) {
             const block = grid[y][x];
-            if (block && block.state !== 'clearing') {
-                // 下が空の場合に落下処理
+            if (block && block.type === 'air' && block.state !== 'clearing') {
                 if (!grid[y + 1][x]) {
                     if (player.x === x && player.y === y + 1) {
-                        if (block.type === 'air') {
-                            // AIRカプセルの場合はプレイヤーが自動取得
-                            air = Math.min(air + 20, MAX_AIR);
-                            grid[y][x] = null;
-                            moved = true;
-                        } else {
-                            // 通常ブロックの場合はプレイヤー圧死（ゲームオーバー）
-                            grid[y + 1][x] = block;
-                            grid[y][x] = null;
-                            isGameOver = true;
-                            moved = true;
-                        }
+                        air = Math.min(air + 20, MAX_AIR);
+                        grid[y][x] = null;
+                        moved = true;
                     } else {
-                        // プレイヤーがいない場合は通常の落下
                         grid[y + 1][x] = block;
                         grid[y][x] = null;
                         moved = true;
@@ -445,6 +479,63 @@ function updateBlockGravity() {
             }
         }
     }
+
+    // 2. 通常ブロックのクラスタ単位の重力処理
+    let clusters = getClusters();
+
+    // 落下順序のため、クラスター内の最大Yが大きい順（下にあるクラスター順）にソート
+    clusters.sort((a, b) => {
+        let maxA = Math.max(...a.map(p => p.y));
+        let maxB = Math.max(...b.map(p => p.y));
+        return maxB - maxA;
+    });
+
+    for (let cluster of clusters) {
+        let clusterSet = new Set(cluster.map(p => `${p.x},${p.y}`));
+
+        // クラスターのサポート（支え）判定
+        let isSupported = false;
+        for (let p of cluster) {
+            let belowY = p.y + 1;
+            if (belowY >= ROWS) {
+                // 地面に接している
+                isSupported = true;
+                break;
+            }
+            let belowBlock = grid[belowY][p.x];
+            if (belowBlock && !clusterSet.has(`${p.x},${belowY}`)) {
+                // 同一クラスター以外のブロックまたはAIRカプセルが下にある
+                isSupported = true;
+                break;
+            }
+        }
+
+        if (!isSupported) {
+            // クラスター全ブロックを一体として1マス下に移動
+            let blocksToMove = cluster.map(p => ({
+                x: p.x,
+                y: p.y,
+                block: grid[p.y][p.x]
+            }));
+
+            // 元の位置をクリア
+            for (let item of blocksToMove) {
+                grid[item.y][item.x] = null;
+            }
+
+            // 移動先にブロックを再配置
+            for (let item of blocksToMove) {
+                let newY = item.y + 1;
+                if (player.x === item.x && player.y === newY) {
+                    isGameOver = true;
+                }
+                grid[newY][item.x] = item.block;
+            }
+
+            moved = true;
+        }
+    }
+
     return moved;
 }
 
