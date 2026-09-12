@@ -3,19 +3,30 @@ const ctx = canvas.getContext('2d');
 
 // 定数定義
 const COLS = 15;
-const ROWS = 20;
+const ROWS = 500; // 500mの深さ
+const VISIBLE_ROWS = 20; // 画面に表示する行数
 const BLOCK_SIZE = 32; // 480 / 15 = 32
+const GOAL_DEPTH = 500; // ゴール深さ（メートル）
 const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
 const PLAYER_GRAVITY_INTERVAL = 10; // プレイヤー重力の更新間隔
-const BLOCK_GRAVITY_INTERVAL = 16;  // ブロック強力の更新間隔（落下速度を遅く調整）
-const FALL_DELAY_FRAMES = 24;        // ブロック落下の溜め（猶予時間：約0.4秒）
+const BLOCK_GRAVITY_INTERVAL = 16;  // ブロック重力の更新間隔
+const FALL_DELAY_FRAMES = 24;        // ブロック落下の溜め（猶予時間）
 
 // AIRシステム定数
 const MAX_AIR = 100;
-const AIR_DECREASE_RATE = 0.03; // 1フレームあたりの減少量（60fpsなら1秒で約1.8%減少）
+const AIR_DECREASE_RATE = 0.03; // 1フレームあたりの減少量
 const AIR_CAPSULE_CHANCE = 0.05; // AIRカプセルの出現確率
 
-// ゲームの状態
+// ゲームの状態定義
+const STATE_START = 'START';
+const STATE_PLAYING = 'PLAYING';
+const STATE_GAMEOVER = 'GAMEOVER';
+const STATE_GAMECLEAR = 'GAMECLEAR';
+
+let gameState = STATE_START;
+let stateChangeCooldown = 0; // 状態遷移直後の誤操作防止用クールダウン
+
+// ゲームの変数
 let playerFrameCount = 0;
 let blockFrameCount = 0;
 let grid = [];
@@ -25,22 +36,52 @@ let player = {
     direction: 'down', // 向き
     color: '#FFFFFF'
 };
+let cameraY = 0; // カメラのスクロールY座標
 let needsRedraw = true;
 let air = MAX_AIR;
-let isGameOver = false;
 
-// 初期化
+// 初期表示とイベントリスナー設定
 function init() {
-    air = MAX_AIR;
-    isGameOver = false;
+    // キーボード入力の監視
+    document.addEventListener('keydown', handleInput);
 
-    // グリッドをランダムな色で埋める
+    // タッチ・ボタンコントロール設定
+    setupTouchControls();
+
+    // キャンバスクリックイベント
+    canvas.addEventListener('click', () => {
+        handleStateTransition();
+    });
+
+    // 初期化時はスタート画面にセット
+    gameState = STATE_START;
+    needsRedraw = true;
+
+    // ゲームループ開始
+    requestAnimationFrame(gameLoop);
+}
+
+// 新しいゲームを開始する初期化
+function startNewGame() {
+    air = MAX_AIR;
+    grid = [];
+    player.x = 7;
+    player.y = 0;
+    player.direction = 'down';
+    cameraY = 0;
+    playerFrameCount = 0;
+    blockFrameCount = 0;
+
+    // グリッドを生成
     for (let y = 0; y < ROWS; y++) {
         let row = [];
         for (let x = 0; x < COLS; x++) {
-            // とりあえずプレイヤーの初期位置だけ空にしておく
-            if (x === player.x && y === player.y) {
+            // プレイヤーの初期位置とその周辺（最上段の数マス）を空にする
+            if (y === 0 && Math.abs(x - player.x) <= 1) {
                 row.push(null);
+            } else if (y === ROWS - 1) {
+                // 最下層はゴールライン表示用
+                row.push({ type: 'goal', color: '#FFD700', state: 'normal' });
             } else {
                 if (Math.random() < AIR_CAPSULE_CHANCE) {
                     row.push({ type: 'air', state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false });
@@ -53,14 +94,25 @@ function init() {
         grid.push(row);
     }
 
-    // キーボード入力の監視
-    document.addEventListener('keydown', handleInput);
+    gameState = STATE_PLAYING;
+    stateChangeCooldown = 30; // 0.5秒クールダウン
+    needsRedraw = true;
+}
 
-    // タッチボタンの監視
-    setupTouchControls();
+// 状態遷移処理
+function handleStateTransition() {
+    if (stateChangeCooldown > 0) return false;
 
-    // ゲームループ開始
-    requestAnimationFrame(gameLoop);
+    if (gameState === STATE_START) {
+        startNewGame();
+        return true;
+    } else if (gameState === STATE_GAMEOVER || gameState === STATE_GAMECLEAR) {
+        gameState = STATE_START;
+        stateChangeCooldown = 20;
+        needsRedraw = true;
+        return true;
+    }
+    return false;
 }
 
 // タッチコントロール設定
@@ -69,15 +121,15 @@ function setupTouchControls() {
         const btn = document.getElementById(id);
         if (!btn) return;
 
-        // タッチイベントの遅延を防ぐためtouchstartを使用
         btn.addEventListener('touchstart', (e) => {
-            e.preventDefault(); // デフォルトの動作（スクロールなど）を防ぐ
+            e.preventDefault();
+            if (handleStateTransition()) return;
             processInput(action);
         }, { passive: false });
 
-        // PCでのクリックテスト用
         btn.addEventListener('click', (e) => {
-             processInput(action);
+            if (handleStateTransition()) return;
+            processInput(action);
         });
     };
 
@@ -88,9 +140,45 @@ function setupTouchControls() {
     bindButton('btn-dig', 'dig');
 }
 
+// キーボード入力処理
+function handleInput(e) {
+    if (['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) {
+        if (handleStateTransition()) {
+            e.preventDefault();
+            return;
+        }
+    }
+
+    if (gameState !== STATE_PLAYING) return;
+
+    switch(e.key) {
+        case 'ArrowUp':
+            processInput('up');
+            e.preventDefault();
+            break;
+        case 'ArrowDown':
+            processInput('down');
+            e.preventDefault();
+            break;
+        case 'ArrowLeft':
+            processInput('left');
+            e.preventDefault();
+            break;
+        case 'ArrowRight':
+            processInput('right');
+            e.preventDefault();
+            break;
+        case ' ':
+        case 'Enter':
+            processInput('dig');
+            e.preventDefault();
+            break;
+    }
+}
+
 // 入力処理共通化
 function processInput(action) {
-    if (isGameOver) return;
+    if (gameState !== STATE_PLAYING) return;
 
     let nextX = player.x;
     let nextY = player.y;
@@ -125,14 +213,21 @@ function processInput(action) {
     }
 
     if (moved) {
-        needsRedraw = true; // 向き変更または移動のため再描画
-        // 画面外に出ないように制限
+        needsRedraw = true;
         if (nextX >= 0 && nextX < COLS && nextY >= 0 && nextY < ROWS) {
             const targetBlock = grid[nextY][nextX];
 
+            // ゴール判定
+            if (nextY >= GOAL_DEPTH - 1) {
+                player.x = nextX;
+                player.y = nextY;
+                gameState = STATE_GAMECLEAR;
+                stateChangeCooldown = 40;
+                return;
+            }
+
             // 移動先が空(null)またはAIRカプセルの場合移動可能
             if (!targetBlock || targetBlock.type === 'air') {
-                // AIRカプセルなら取得
                 if (targetBlock && targetBlock.type === 'air') {
                     grid[nextY][nextX] = null;
                     air = Math.min(air + 20, MAX_AIR);
@@ -142,30 +237,6 @@ function processInput(action) {
                 player.y = nextY;
             }
         }
-    }
-}
-
-// キーボード入力処理
-function handleInput(e) {
-    if (isGameOver) return;
-    switch(e.key) {
-        case 'ArrowUp':
-            processInput('up');
-            break;
-        case 'ArrowDown':
-            processInput('down');
-            break;
-        case 'ArrowLeft':
-            processInput('left');
-            break;
-        case 'ArrowRight':
-            processInput('right');
-            break;
-        case ' ':
-            processInput('dig');
-            break;
-        default:
-            return; // Ignore other keys
     }
 }
 
@@ -227,32 +298,111 @@ function isSameColorBlock(b, color) {
     return b && b.type === 'block' && b.color === color && b.state !== 'clearing';
 }
 
-// 描画処理
-function draw() {
-    // 背景クリア
+// カメラ位置の更新
+function updateCamera() {
+    // プレイヤーが画面の上部から数えて8行目付近になるようにスクロールターゲットを計算
+    let targetRow = player.y - 8;
+    targetRow = Math.max(0, Math.min(ROWS - VISIBLE_ROWS, targetRow));
+    const targetY = targetRow * BLOCK_SIZE;
+
+    // スムーズスクロール
+    const diff = targetY - cameraY;
+    if (Math.abs(diff) > 0.5) {
+        cameraY += diff * 0.2;
+        needsRedraw = true;
+    } else if (cameraY !== targetY) {
+        cameraY = targetY;
+        needsRedraw = true;
+    }
+}
+
+// スタート画面描画
+function drawStartScreen() {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // タイトル背景デザイン
+    ctx.fillStyle = '#222';
+    ctx.fillRect(20, 20, canvas.width - 40, canvas.height - 40);
+
+    // タイトルロゴ
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '900 42px "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#FF5733';
+    ctx.shadowBlur = 10;
+    ctx.fillText('MR. DRILLER', canvas.width / 2, 130);
+    ctx.shadowBlur = 0;
+
+    // サブタイトル / 目標
+    ctx.fillStyle = '#00FFFF';
+    ctx.font = 'bold 20px Arial';
+    ctx.fillText('〜 地下 500m を目指せ！ 〜', canvas.width / 2, 180);
+
+    // ルール・操作説明
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'left';
+    const startX = 100;
+    let textY = 240;
+
+    ctx.fillText('【操作方法】', startX, textY); textY += 30;
+    ctx.fillText('・矢印キー / D-PAD : プレイヤー移動', startX + 20, textY); textY += 25;
+    ctx.fillText('・スペースキー / DIGボタン : ブロック消去', startX + 20, textY); textY += 35;
+
+    ctx.fillText('【ルール】', startX, textY); textY += 30;
+    ctx.fillText('・同じ色のブロックを掘ると一括消去！', startX + 20, textY); textY += 25;
+    ctx.fillText('・AIRカプセルを取って酸素を補給！', startX + 20, textY); textY += 25;
+    ctx.fillText('・落下してくるブロックに潰されるとミス！', startX + 20, textY); textY += 25;
+    ctx.fillText('・地下500mのゴールに到達すればクリア！', startX + 20, textY); textY += 45;
+
+    // スタート案内（点滅）
+    ctx.textAlign = 'center';
+    if (Math.floor(Date.now() / 500) % 2 === 0) {
+        ctx.fillStyle = '#FF5733';
+        ctx.font = 'bold 24px Arial';
+        ctx.fillText('PRESS SPACE OR DIG TO START', canvas.width / 2, 560);
+    }
+}
+
+// ゲーム画面描画
+function drawGame() {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // --- ゲームエリア描画 ---
+    // 描画範囲の決定
+    const startRow = Math.max(0, Math.floor(cameraY / BLOCK_SIZE) - 1);
+    const endRow = Math.min(ROWS, Math.ceil((cameraY + canvas.height) / BLOCK_SIZE) + 1);
 
     // ブロックの描画
-    for (let y = 0; y < ROWS; y++) {
+    for (let y = startRow; y < endRow; y++) {
         for (let x = 0; x < COLS; x++) {
             const block = grid[y][x];
             if (block) {
                 let drawSize = BLOCK_SIZE;
                 let drawX = x * BLOCK_SIZE;
-                let drawY = y * BLOCK_SIZE;
+                let drawY = y * BLOCK_SIZE - cameraY;
+
+                if (block.type === 'goal') {
+                    // ゴールブロック描画
+                    ctx.fillStyle = '#FFD700';
+                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                    ctx.fillStyle = '#000';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('GOAL', drawX + drawSize / 2, drawY + drawSize / 2);
+                    continue;
+                }
 
                 // 消去アニメーション
                 if (block.state === 'clearing') {
-                    const ratio = block.timer / 15; // 15は最大タイマー値
+                    const ratio = block.timer / 15;
                     drawSize = BLOCK_SIZE * ratio;
                     const offset = (BLOCK_SIZE - drawSize) / 2;
                     drawX += offset;
                     drawY += offset;
 
-                    // 点滅効果
                     if (block.timer % 4 < 2) {
                         ctx.globalAlpha = 0.5;
                     }
@@ -285,7 +435,6 @@ function draw() {
                         ctx.strokeStyle = '#222';
                         ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                     } else {
-                        // 隣接する同色ブロックの有無を確認して外枠のみ描画（ブロック結合）
                         const topConnected = y > 0 && isSameColorBlock(grid[y-1][x], block.color);
                         const bottomConnected = y < ROWS - 1 && isSameColorBlock(grid[y+1][x], block.color);
                         const leftConnected = x > 0 && isSameColorBlock(grid[y][x-1], block.color);
@@ -314,22 +463,21 @@ function draw() {
                     }
                 }
 
-                ctx.globalAlpha = 1.0; // アルファ値をリセット
+                ctx.globalAlpha = 1.0;
             }
         }
     }
 
     // プレイヤーの描画
     ctx.fillStyle = player.color;
-    // プレイヤーを少し小さく描画して見やすくする
     const playerPadding = 4;
     const px = player.x * BLOCK_SIZE + playerPadding;
-    const py = player.y * BLOCK_SIZE + playerPadding;
+    const py = player.y * BLOCK_SIZE - cameraY + playerPadding;
     const pSize = BLOCK_SIZE - playerPadding * 2;
 
     ctx.fillRect(px, py, pSize, pSize);
 
-    // 向きを表示
+    // プレイヤーの目の描画（向き指示）
     ctx.fillStyle = '#000';
     const eyeSize = 4;
     let eyeX = px + pSize / 2 - eyeSize / 2;
@@ -347,15 +495,15 @@ function draw() {
     const uiX = 480;
     const uiWidth = 100;
 
-    // UI背景（念のため）
+    // UI背景
     ctx.fillStyle = '#222';
     ctx.fillRect(uiX, 0, uiWidth, canvas.height);
 
     // AIRゲージ枠
-    const gaugeX = uiX + 20;
-    const gaugeY = 50;
+    const gaugeX = uiX + 25;
+    const gaugeY = 60;
     const gaugeW = 30;
-    const gaugeH = 300;
+    const gaugeH = 260;
 
     ctx.strokeStyle = '#FFF';
     ctx.lineWidth = 2;
@@ -372,38 +520,95 @@ function draw() {
     const airY = gaugeY + (gaugeH - airHeight);
 
     if (air <= 20) {
-        // 点滅させるか赤くする
         if (Math.floor(Date.now() / 200) % 2 === 0) {
             ctx.fillStyle = '#FF0000';
         } else {
-             ctx.fillStyle = '#880000';
+            ctx.fillStyle = '#880000';
         }
     } else {
         ctx.fillStyle = '#00FFFF';
     }
     ctx.fillRect(gaugeX + 1, airY, gaugeW - 2, airHeight);
 
-    // 数値表示
+    // AIR数値表示
     ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 14px Arial';
     ctx.fillText(Math.floor(air) + '%', gaugeX + gaugeW/2, gaugeY + gaugeH + 20);
 
-    // ゲームオーバー表示
-    if (isGameOver) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    // 深さ(DEPTH)表示
+    const depthY = gaugeY + gaugeH + 70;
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 14px Arial';
+    ctx.fillText('DEPTH', uiX + uiWidth/2, depthY);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 20px Arial';
+    ctx.fillText(`${player.y}m`, uiX + uiWidth/2, depthY + 30);
+
+    ctx.fillStyle = '#888';
+    ctx.font = '12px Arial';
+    ctx.fillText(`/ ${GOAL_DEPTH}m`, uiX + uiWidth/2, depthY + 50);
+
+    // オーバーレイ表示（ゲームオーバー / ゲームクリア）
+    if (gameState === STATE_GAMEOVER) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = '#FF0000';
-        ctx.font = 'bold 40px Arial';
+        ctx.fillStyle = '#FF3333';
+        ctx.font = 'bold 44px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 30);
+
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 20px Arial';
+        ctx.fillText(`到達深さ: ${player.y} m`, canvas.width / 2, canvas.height / 2 + 20);
+
+        if (stateChangeCooldown <= 0 && Math.floor(Date.now() / 400) % 2 === 0) {
+            ctx.fillStyle = '#FFFF00';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText('PRESS ANY KEY TO RETURN', canvas.width / 2, canvas.height / 2 + 80);
+        }
+    } else if (gameState === STATE_GAMECLEAR) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#FFD700';
+        ctx.font = 'bold 44px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 40);
+
+        ctx.fillStyle = '#00FFFF';
+        ctx.font = 'bold 24px Arial';
+        ctx.fillText('地下 500m 到達おめでとう！', canvas.width / 2, canvas.height / 2 + 10);
+
+        ctx.fillStyle = '#FFF';
+        ctx.font = '18px Arial';
+        ctx.fillText(`残りAIR: ${Math.floor(air)}%`, canvas.width / 2, canvas.height / 2 + 50);
+
+        if (stateChangeCooldown <= 0 && Math.floor(Date.now() / 400) % 2 === 0) {
+            ctx.fillStyle = '#FFFF00';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText('PRESS ANY KEY TO RETURN', canvas.width / 2, canvas.height / 2 + 110);
+        }
+    }
+}
+
+// 全体描画関数
+function draw() {
+    if (gameState === STATE_START) {
+        drawStartScreen();
+    } else {
+        drawGame();
     }
 }
 
 // 落下猶予（溜め）タイマーの更新
 function updateFallDelays() {
-    // 1. AIRカプセル
+    const startRow = Math.max(0, Math.floor(cameraY / BLOCK_SIZE) - 2);
+    const endRow = Math.min(ROWS, Math.ceil((cameraY + canvas.height) / BLOCK_SIZE) + 2);
+
     for (let x = 0; x < COLS; x++) {
-        for (let y = 0; y < ROWS; y++) {
+        for (let y = startRow; y < endRow; y++) {
             const block = grid[y][x];
             if (block && block.type === 'air') {
                 const isSupported = (y === ROWS - 1) || (grid[y + 1][x] !== null);
@@ -417,8 +622,7 @@ function updateFallDelays() {
         }
     }
 
-    // 2. クラスター（通常ブロック）
-    let clusters = getClusters();
+    let clusters = getClusters(startRow, endRow);
     for (let cluster of clusters) {
         let clusterSet = new Set(cluster.map(p => `${p.x},${p.y}`));
         let isSupported = false;
@@ -452,33 +656,38 @@ function updateFallDelays() {
 
 // 更新処理
 function update() {
-    if (isGameOver) return;
+    if (stateChangeCooldown > 0) {
+        stateChangeCooldown--;
+    }
+
+    if (gameState === STATE_START) {
+        needsRedraw = true; // スタート画面の点滅テキストアニメーションのため
+        return;
+    }
+
+    if (gameState !== STATE_PLAYING) {
+        needsRedraw = true;
+        return;
+    }
+
+    // カメラ位置更新
+    updateCamera();
 
     // AIR減少
     if (air > 0) {
         air -= AIR_DECREASE_RATE;
         if (air <= 0) {
             air = 0;
-            isGameOver = true;
+            gameState = STATE_GAMEOVER;
+            stateChangeCooldown = 30;
             needsRedraw = true;
         } else {
-             needsRedraw = true;
+            needsRedraw = true;
         }
     }
 
     updateClearingBlocks();
     updateFallDelays();
-
-    // 溜め振動中のブロックがあれば再描画
-    for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-            const b = grid[y][x];
-            if (b && b.isUnsupported && b.fallDelay > 0) {
-                needsRedraw = true;
-                break;
-            }
-        }
-    }
 
     playerFrameCount++;
     if (playerFrameCount >= PLAYER_GRAVITY_INTERVAL) {
@@ -501,10 +710,13 @@ function update() {
 
 // プレイヤーの重力処理
 function updatePlayerGravity() {
-    // 地面より上にいて、下が空(null)なら落下
     if (player.y < ROWS - 1) {
         if (!grid[player.y + 1][player.x]) {
             player.y++;
+            if (player.y >= GOAL_DEPTH - 1) {
+                gameState = STATE_GAMECLEAR;
+                stateChangeCooldown = 40;
+            }
             return true;
         }
     }
@@ -512,14 +724,17 @@ function updatePlayerGravity() {
 }
 
 // 結合ブロックのクラスター（連結成分）抽出関数
-function getClusters() {
+function getClusters(minY = 0, maxY = ROWS) {
+    minY = Math.max(0, minY);
+    maxY = Math.min(ROWS, maxY);
+
     let visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
     let clusters = [];
 
-    for (let y = 0; y < ROWS; y++) {
+    for (let y = minY; y < maxY; y++) {
         for (let x = 0; x < COLS; x++) {
             const block = grid[y][x];
-            if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air') continue;
+            if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air' || block.type === 'goal') continue;
 
             let cluster = [];
             let color = block.color;
@@ -555,16 +770,19 @@ function getClusters() {
     return clusters;
 }
 
-// ブロックの重力処理（同色結合クラスター単位）
+// ブロックの重力処理
 function updateBlockGravity() {
     let moved = false;
 
-    // 1. AIRカプセルの重力処理（単体で落下）
+    const startRow = Math.max(0, Math.floor(cameraY / BLOCK_SIZE) - 4);
+    const endRow = Math.min(ROWS - 1, Math.ceil((cameraY + canvas.height) / BLOCK_SIZE) + 4);
+
+    // 1. AIRカプセルの重力処理
     for (let x = 0; x < COLS; x++) {
-        for (let y = ROWS - 2; y >= 0; y--) {
+        for (let y = endRow; y >= startRow; y--) {
             const block = grid[y][x];
             if (block && block.type === 'air' && block.state !== 'clearing') {
-                if (!grid[y + 1][x] && (block.fallDelay === undefined || block.fallDelay <= 0)) {
+                if (y + 1 < ROWS && !grid[y + 1][x] && (block.fallDelay === undefined || block.fallDelay <= 0)) {
                     if (player.x === x && player.y === y + 1) {
                         air = Math.min(air + 20, MAX_AIR);
                         grid[y][x] = null;
@@ -580,9 +798,8 @@ function updateBlockGravity() {
     }
 
     // 2. 通常ブロックのクラスタ単位の重力処理
-    let clusters = getClusters();
+    let clusters = getClusters(startRow, endRow);
 
-    // 落下順序のため、クラスター内の最大Yが大きい順（下にあるクラスター順）にソート
     clusters.sort((a, b) => {
         let maxA = Math.max(...a.map(p => p.y));
         let maxB = Math.max(...b.map(p => p.y));
@@ -592,7 +809,6 @@ function updateBlockGravity() {
     for (let cluster of clusters) {
         let clusterSet = new Set(cluster.map(p => `${p.x},${p.y}`));
 
-        // クラスターのサポート（支え）判定
         let isSupported = false;
         let minFallDelay = Infinity;
 
@@ -604,36 +820,32 @@ function updateBlockGravity() {
 
             let belowY = p.y + 1;
             if (belowY >= ROWS) {
-                // 地面に接している
                 isSupported = true;
                 break;
             }
             let belowBlock = grid[belowY][p.x];
             if (belowBlock && !clusterSet.has(`${p.x},${belowY}`)) {
-                // 同一クラスター以外のブロックまたはAIRカプセルが下にある
                 isSupported = true;
                 break;
             }
         }
 
         if (!isSupported && minFallDelay <= 0) {
-            // クラスター全ブロックを一体として1マス下に移動
             let blocksToMove = cluster.map(p => ({
                 x: p.x,
                 y: p.y,
                 block: grid[p.y][p.x]
             }));
 
-            // 元の位置をクリア
             for (let item of blocksToMove) {
                 grid[item.y][item.x] = null;
             }
 
-            // 移動先にブロックを再配置
             for (let item of blocksToMove) {
                 let newY = item.y + 1;
                 if (player.x === item.x && player.y === newY) {
-                    isGameOver = true;
+                    gameState = STATE_GAMEOVER;
+                    stateChangeCooldown = 30;
                 }
                 grid[newY][item.x] = item.block;
             }
@@ -648,7 +860,10 @@ function updateBlockGravity() {
 // 消去アニメーションの更新
 function updateClearingBlocks() {
     let animating = false;
-    for (let y = 0; y < ROWS; y++) {
+    const startRow = Math.max(0, Math.floor(cameraY / BLOCK_SIZE) - 2);
+    const endRow = Math.min(ROWS, Math.ceil((cameraY + canvas.height) / BLOCK_SIZE) + 2);
+
+    for (let y = startRow; y < endRow; y++) {
         for (let x = 0; x < COLS; x++) {
             const block = grid[y][x];
             if (block && block.state === 'clearing') {
@@ -656,7 +871,7 @@ function updateClearingBlocks() {
                 block.timer--;
                 if (block.timer <= 0) {
                     grid[y][x] = null;
-                    needsRedraw = true; // 消えた
+                    needsRedraw = true;
                 }
             }
         }
@@ -666,65 +881,13 @@ function updateClearingBlocks() {
     }
 }
 
-// 連結判定と消去処理
-function checkMatches() {
-    let visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
-
-    for (let y = 0; y < ROWS; y++) {
-        for (let x = 0; x < COLS; x++) {
-            const block = grid[y][x];
-            // AIRカプセルはマッチング対象外
-            if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air') continue;
-
-            let group = [];
-            let color = block.color;
-            let stack = [{x, y}];
-            visited[y][x] = true;
-            group.push({x, y});
-
-            // 深さ優先探索で連結ブロックを探す
-            while(stack.length > 0) {
-                let current = stack.pop();
-                const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-
-                for (let d of dirs) {
-                    let nx = current.x + d[0];
-                    let ny = current.y + d[1];
-
-                    if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
-                        const nextBlock = grid[ny][nx];
-                        if (!visited[ny][nx] && nextBlock &&
-                            nextBlock.color === color &&
-                            nextBlock.state !== 'clearing' &&
-                            nextBlock.type !== 'air') {
-
-                            visited[ny][nx] = true;
-                            group.push({x: nx, y: ny});
-                            stack.push({x: nx, y: ny});
-                        }
-                    }
-                }
-            }
-
-            // 4つ以上連結していたら消去対象にする
-            if (group.length >= 4) {
-                for (let b of group) {
-                    grid[b.y][b.x].state = 'clearing';
-                    grid[b.y][b.x].timer = 15; // アニメーション時間（約0.25秒）
-                }
-                needsRedraw = true;
-            }
-        }
-    }
-}
-
 // ゲームループ
 function gameLoop() {
+    update();
     if (needsRedraw) {
         draw();
         needsRedraw = false;
     }
-    update();
     requestAnimationFrame(gameLoop);
 }
 
