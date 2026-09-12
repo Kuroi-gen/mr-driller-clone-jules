@@ -6,7 +6,9 @@ const COLS = 15;
 const ROWS = 20;
 const BLOCK_SIZE = 32; // 480 / 15 = 32
 const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
-const GRAVITY_INTERVAL = 10; // 重力の更新間隔（フレーム数）
+const PLAYER_GRAVITY_INTERVAL = 10; // プレイヤー重力の更新間隔
+const BLOCK_GRAVITY_INTERVAL = 16;  // ブロック強力の更新間隔（落下速度を遅く調整）
+const FALL_DELAY_FRAMES = 24;        // ブロック落下の溜め（猶予時間：約0.4秒）
 
 // AIRシステム定数
 const MAX_AIR = 100;
@@ -14,7 +16,8 @@ const AIR_DECREASE_RATE = 0.03; // 1フレームあたりの減少量（60fpsな
 const AIR_CAPSULE_CHANCE = 0.05; // AIRカプセルの出現確率
 
 // ゲームの状態
-let frameCount = 0;
+let playerFrameCount = 0;
+let blockFrameCount = 0;
 let grid = [];
 let player = {
     x: 7, // グリッド上のX座標
@@ -40,10 +43,10 @@ function init() {
                 row.push(null);
             } else {
                 if (Math.random() < AIR_CAPSULE_CHANCE) {
-                    row.push({ type: 'air', state: 'normal', timer: 0 });
+                    row.push({ type: 'air', state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false });
                 } else {
                     const color = COLORS[Math.floor(Math.random() * COLORS.length)];
-                    row.push({ type: 'block', color: color, state: 'normal', timer: 0 });
+                    row.push({ type: 'block', color: color, state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false });
                 }
             }
         }
@@ -179,8 +182,41 @@ function dig() {
     }
 
     if (targetX >= 0 && targetX < COLS && targetY >= 0 && targetY < ROWS) {
-        if (grid[targetY][targetX]) {
-            grid[targetY][targetX] = null;
+        const targetBlock = grid[targetY][targetX];
+        if (targetBlock) {
+            if (targetBlock.type === 'air') {
+                grid[targetY][targetX] = null;
+            } else if (targetBlock.type === 'block') {
+                const color = targetBlock.color;
+                const stack = [{x: targetX, y: targetY}];
+                const visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
+                visited[targetY][targetX] = true;
+
+                let blocksToClear = [];
+                while (stack.length > 0) {
+                    const curr = stack.pop();
+                    blocksToClear.push(curr);
+
+                    const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+                    for (let d of dirs) {
+                        let nx = curr.x + d[0];
+                        let ny = curr.y + d[1];
+                        if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
+                            if (!visited[ny][nx]) {
+                                const b = grid[ny][nx];
+                                if (b && b.type === 'block' && b.color === color && b.state !== 'clearing') {
+                                    visited[ny][nx] = true;
+                                    stack.push({x: nx, y: ny});
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for (let b of blocksToClear) {
+                    grid[b.y][b.x] = null;
+                }
+            }
             needsRedraw = true;
         }
     }
@@ -220,6 +256,11 @@ function draw() {
                     if (block.timer % 4 < 2) {
                         ctx.globalAlpha = 0.5;
                     }
+                }
+
+                // 溜め（猶予時間）中の微振動エフェクト
+                if (block.state !== 'clearing' && block.isUnsupported && block.fallDelay > 0) {
+                    drawX += (Math.random() - 0.5) * 3;
                 }
 
                 if (block.type === 'air') {
@@ -358,6 +399,57 @@ function draw() {
     }
 }
 
+// 落下猶予（溜め）タイマーの更新
+function updateFallDelays() {
+    // 1. AIRカプセル
+    for (let x = 0; x < COLS; x++) {
+        for (let y = 0; y < ROWS; y++) {
+            const block = grid[y][x];
+            if (block && block.type === 'air') {
+                const isSupported = (y === ROWS - 1) || (grid[y + 1][x] !== null);
+                block.isUnsupported = !isSupported;
+                if (isSupported) {
+                    block.fallDelay = FALL_DELAY_FRAMES;
+                } else if (block.fallDelay > 0) {
+                    block.fallDelay--;
+                }
+            }
+        }
+    }
+
+    // 2. クラスター（通常ブロック）
+    let clusters = getClusters();
+    for (let cluster of clusters) {
+        let clusterSet = new Set(cluster.map(p => `${p.x},${p.y}`));
+        let isSupported = false;
+
+        for (let p of cluster) {
+            let belowY = p.y + 1;
+            if (belowY >= ROWS) {
+                isSupported = true;
+                break;
+            }
+            let belowBlock = grid[belowY][p.x];
+            if (belowBlock && !clusterSet.has(`${p.x},${belowY}`)) {
+                isSupported = true;
+                break;
+            }
+        }
+
+        for (let p of cluster) {
+            const block = grid[p.y][p.x];
+            if (block) {
+                block.isUnsupported = !isSupported;
+                if (isSupported) {
+                    block.fallDelay = FALL_DELAY_FRAMES;
+                } else if (block.fallDelay > 0) {
+                    block.fallDelay--;
+                }
+            }
+        }
+    }
+}
+
 // 更新処理
 function update() {
     if (isGameOver) return;
@@ -370,33 +462,43 @@ function update() {
             isGameOver = true;
             needsRedraw = true;
         } else {
-             // ゲージ更新のために頻繁に再描画が必要だが、
-             // フレーム毎だと重いかもしれないので一定間隔か、あるいはUI部分だけならOK
-             // ここではneedsRedrawを立てるかどうか検討
-             // AIRバーの変化を見せるため、例えば10フレームに1回再描画するか、
-             // そもそもAIR_DECREASE_RATEが小さいので、値が1変わるごとに描画でもよい
-             // 簡易的に毎回描画リクエストする（描画負荷は低いので）
              needsRedraw = true;
         }
     }
 
     updateClearingBlocks();
+    updateFallDelays();
 
-    frameCount++;
-    if (frameCount >= GRAVITY_INTERVAL) {
+    // 溜め振動中のブロックがあれば再描画
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const b = grid[y][x];
+            if (b && b.isUnsupported && b.fallDelay > 0) {
+                needsRedraw = true;
+                break;
+            }
+        }
+    }
+
+    playerFrameCount++;
+    if (playerFrameCount >= PLAYER_GRAVITY_INTERVAL) {
         const playerMoved = updatePlayerGravity();
-        const blocksMoved = updateBlockGravity();
-
-        if (playerMoved || blocksMoved) {
+        if (playerMoved) {
             needsRedraw = true;
         }
+        playerFrameCount = 0;
+    }
 
-        // ブロックが動いていない（安定している）場合のみマッチ判定を行う
-        if (!blocksMoved) {
+    blockFrameCount++;
+    if (blockFrameCount >= BLOCK_GRAVITY_INTERVAL) {
+        const blocksMoved = updateBlockGravity();
+        if (blocksMoved) {
+            needsRedraw = true;
+        } else {
+            // ブロックが動いていない（安定している）場合のみマッチ判定を行う
             checkMatches();
         }
-
-        frameCount = 0;
+        blockFrameCount = 0;
     }
 }
 
@@ -465,7 +567,7 @@ function updateBlockGravity() {
         for (let y = ROWS - 2; y >= 0; y--) {
             const block = grid[y][x];
             if (block && block.type === 'air' && block.state !== 'clearing') {
-                if (!grid[y + 1][x]) {
+                if (!grid[y + 1][x] && (block.fallDelay === undefined || block.fallDelay <= 0)) {
                     if (player.x === x && player.y === y + 1) {
                         air = Math.min(air + 20, MAX_AIR);
                         grid[y][x] = null;
@@ -495,7 +597,14 @@ function updateBlockGravity() {
 
         // クラスターのサポート（支え）判定
         let isSupported = false;
+        let minFallDelay = Infinity;
+
         for (let p of cluster) {
+            let block = grid[p.y][p.x];
+            if (block && block.fallDelay !== undefined) {
+                if (block.fallDelay < minFallDelay) minFallDelay = block.fallDelay;
+            }
+
             let belowY = p.y + 1;
             if (belowY >= ROWS) {
                 // 地面に接している
@@ -510,7 +619,7 @@ function updateBlockGravity() {
             }
         }
 
-        if (!isSupported) {
+        if (!isSupported && minFallDelay <= 0) {
             // クラスター全ブロックを一体として1マス下に移動
             let blocksToMove = cluster.map(p => ({
                 x: p.x,
