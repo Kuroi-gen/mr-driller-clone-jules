@@ -494,9 +494,6 @@ function update() {
         const blocksMoved = updateBlockGravity();
         if (blocksMoved) {
             needsRedraw = true;
-        } else {
-            // ブロックが動いていない（安定している）場合のみマッチ判定を行う
-            checkMatches();
         }
         blockFrameCount = 0;
     }
