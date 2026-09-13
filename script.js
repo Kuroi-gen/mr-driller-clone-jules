@@ -7,7 +7,16 @@ const GOAL_DEPTH = 500; // ゴール深さ（メートル）
 const ROWS = GOAL_DEPTH + 1; // 0〜500mまでの行数（計501行）
 const VISIBLE_ROWS = 20; // 画面に表示する行数
 const BLOCK_SIZE = 32; // 480 / 15 = 32
-const COLORS = ['#FF5733', '#33FF57', '#3357FF', '#F333FF', '#FFFF33'];
+const COLORS = ['#FF4757', '#2ED573', '#1E90FF', '#FF6B81', '#FFA502'];
+
+// カラーパレットマップ (メイン色 -> { top, bottom, shadow })
+const COLOR_PALETTES = {
+    '#FF4757': { top: '#FF7885', main: '#FF4757', bottom: '#C02E3D' },
+    '#2ED573': { top: '#55E68A', main: '#2ED573', bottom: '#1C9C52' },
+    '#1E90FF': { top: '#70A1FF', main: '#1E90FF', bottom: '#0F61B5' },
+    '#FF6B81': { top: '#FFA4B2', main: '#FF6B81', bottom: '#C93A50' },
+    '#FFA502': { top: '#FFC048', main: '#FFA502', bottom: '#C77C00' }
+};
 const PLAYER_GRAVITY_INTERVAL = 10; // プレイヤー重力の更新間隔
 const BLOCK_GRAVITY_INTERVAL = 16;  // ブロック重力の更新間隔
 const FALL_DELAY_FRAMES = 24;        // ブロック落下の溜め（猶予時間）
@@ -27,6 +36,163 @@ const STATE_GAMECLEAR = 'GAMECLEAR';
 let gameState = STATE_START;
 let stateChangeCooldown = 0; // 状態遷移直後の誤操作防止用クールダウン
 
+// サウンド管理 (Web Audio API)
+let audioCtx = null;
+let isMuted = false;
+let bgmTimer = null;
+let bgmStep = 0;
+
+function initAudio() {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+            audioCtx = new AudioContext();
+        }
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+function toggleMute() {
+    isMuted = !isMuted;
+    const muteBtn = document.getElementById('mute-btn');
+    if (muteBtn) {
+        muteBtn.innerText = isMuted ? '🔇' : '🔊';
+        muteBtn.title = isMuted ? 'サウンドOFF' : 'サウンドON';
+    }
+    if (isMuted) {
+        stopBGM();
+    } else if (gameState === STATE_PLAYING) {
+        startBGM();
+    }
+}
+
+// 効果音再生ヘルパー関数
+function playTone(freq, type, duration, gainValue = 0.1, freqRamp = null) {
+    if (isMuted || !audioCtx) return;
+    try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        if (freqRamp) {
+            osc.frequency.exponentialRampToValueAtTime(freqRamp, audioCtx.currentTime + duration);
+        }
+        gain.gain.setValueAtTime(gainValue, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function playDigSE() {
+    if (isMuted || !audioCtx) return;
+    try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.08);
+
+        gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.08);
+    } catch (e) {}
+}
+
+function playClearSE() {
+    if (isMuted || !audioCtx) return;
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    notes.forEach((freq, idx) => {
+        setTimeout(() => {
+            playTone(freq, 'triangle', 0.12, 0.12);
+        }, idx * 40);
+    });
+}
+
+function playAirSE() {
+    if (isMuted || !audioCtx) return;
+    playTone(587.33, 'sine', 0.08, 0.15, 880); // D5 -> A5
+    setTimeout(() => {
+        playTone(1174.66, 'sine', 0.15, 0.15); // D6
+    }, 80);
+}
+
+function playPenaltySE() {
+    if (isMuted || !audioCtx) return;
+    playTone(120, 'square', 0.1, 0.2, 50);
+}
+
+function playGameOverSE() {
+    stopBGM();
+    if (isMuted || !audioCtx) return;
+    const notes = [400, 350, 300, 220];
+    notes.forEach((freq, idx) => {
+        setTimeout(() => {
+            playTone(freq, 'sawtooth', 0.25, 0.15);
+        }, idx * 180);
+    });
+}
+
+function playGameClearSE() {
+    stopBGM();
+    if (isMuted || !audioCtx) return;
+    const notes = [523.25, 659.25, 783.99, 1046.50, 880, 1046.50];
+    const times = [0, 120, 240, 360, 540, 720];
+    notes.forEach((freq, idx) => {
+        setTimeout(() => {
+            playTone(freq, 'triangle', 0.25, 0.15);
+        }, times[idx]);
+    });
+}
+
+// BGM再生シークエンサー
+const BGM_MELODY = [
+    261.63, 329.63, 392.00, 523.25, 392.00, 329.63, 261.63, 329.63,
+    293.66, 349.23, 440.00, 587.33, 440.00, 349.23, 293.66, 349.23,
+    329.63, 392.00, 493.88, 659.25, 493.88, 392.00, 329.63, 392.00,
+    349.23, 440.00, 523.25, 698.46, 659.25, 587.33, 523.25, 392.00
+];
+
+function startBGM() {
+    stopBGM();
+    if (isMuted) return;
+    bgmStep = 0;
+    bgmTimer = setInterval(() => {
+        if (gameState !== STATE_PLAYING || isMuted || !audioCtx) {
+            stopBGM();
+            return;
+        }
+        const freq = BGM_MELODY[bgmStep % BGM_MELODY.length];
+        playTone(freq, 'square', 0.1, 0.03);
+
+        // ベース伴奏
+        if (bgmStep % 4 === 0) {
+            const bassFreq = freq / 2;
+            playTone(bassFreq, 'triangle', 0.18, 0.04);
+        }
+        bgmStep++;
+    }, 140);
+}
+
+function stopBGM() {
+    if (bgmTimer) {
+        clearInterval(bgmTimer);
+        bgmTimer = null;
+    }
+}
+
 // ゲームの変数
 let playerFrameCount = 0;
 let blockFrameCount = 0;
@@ -43,14 +209,28 @@ let air = MAX_AIR;
 
 // 初期表示とイベントリスナー設定
 function init() {
+    // ミュートボタン設定
+    const muteBtn = document.getElementById('mute-btn');
+    if (muteBtn) {
+        muteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            initAudio();
+            toggleMute();
+        });
+    }
+
     // キーボード入力の監視
-    document.addEventListener('keydown', handleInput);
+    document.addEventListener('keydown', (e) => {
+        initAudio();
+        handleInput(e);
+    });
 
     // タッチ・ボタンコントロール設定
     setupTouchControls();
 
     // キャンバスクリックイベント
     canvas.addEventListener('click', () => {
+        initAudio();
         handleStateTransition();
     });
 
@@ -64,6 +244,7 @@ function init() {
 
 // 新しいゲームを開始する初期化
 function startNewGame() {
+    initAudio();
     air = MAX_AIR;
     grid = [];
     player.x = 7;
@@ -100,6 +281,8 @@ function startNewGame() {
     gameState = STATE_PLAYING;
     stateChangeCooldown = 30; // 0.5秒クールダウン
     needsRedraw = true;
+
+    startBGM();
 }
 
 // 状態遷移処理
@@ -226,6 +409,7 @@ function processInput(action) {
                 player.y = nextY;
                 gameState = STATE_GAMECLEAR;
                 stateChangeCooldown = 40;
+                playGameClearSE();
                 return;
             }
 
@@ -234,6 +418,7 @@ function processInput(action) {
                 if (targetBlock && targetBlock.type === 'air') {
                     grid[nextY][nextX] = null;
                     air = Math.min(air + 20, MAX_AIR);
+                    playAirSE();
                 }
 
                 player.x = nextX;
@@ -260,17 +445,22 @@ function dig() {
         if (targetBlock) {
             if (targetBlock.type === 'air') {
                 grid[targetY][targetX] = null;
+                playAirSE();
             } else if (targetBlock.type === 'penalty') {
                 targetBlock.hp--;
+                playPenaltySE();
                 if (targetBlock.hp <= 0) {
                     grid[targetY][targetX] = null;
+                    playClearSE();
                     air = Math.max(0, air - 20);
                     if (air <= 0) {
                         gameState = STATE_GAMEOVER;
                         stateChangeCooldown = 30;
+                        playGameOverSE();
                     }
                 }
             } else if (targetBlock.type === 'block') {
+                playDigSE();
                 const color = targetBlock.color;
                 const stack = [{x: targetX, y: targetY}];
                 const visited = Array(ROWS).fill(null).map(() => Array(COLS).fill(false));
@@ -332,60 +522,299 @@ function updateCamera() {
     }
 }
 
+// 角丸矩形描画ヘルパー関数
+function drawRoundRect(x, y, width, height, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+}
+
+// ポップな背景の描画（深さに応じてグラデーション＆地層模様が変化）
+function drawBackground() {
+    const playWidth = COLS * BLOCK_SIZE; // 480px
+    const currentMeters = Math.floor(cameraY / BLOCK_SIZE);
+
+    // 深さに基づく背景テーマ
+    let topColor = '#1e1b4b';
+    let bottomColor = '#311b92';
+    let patternColor = 'rgba(255, 255, 255, 0.05)';
+
+    if (currentMeters < 100) {
+        topColor = '#0d1b2a'; bottomColor = '#1b263b';
+    } else if (currentMeters < 250) {
+        topColor = '#2b0938'; bottomColor = '#421052';
+    } else if (currentMeters < 400) {
+        topColor = '#3a0007'; bottomColor = '#5c000e';
+    } else {
+        topColor = '#1a0033'; bottomColor = '#000022';
+    }
+
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    bgGrad.addColorStop(0, topColor);
+    bgGrad.addColorStop(1, bottomColor);
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, playWidth, canvas.height);
+
+    // 地層風ドット/ストライプパターンの装飾
+    ctx.fillStyle = patternColor;
+    for (let i = 0; i < canvas.height; i += 40) {
+        const offset = (Math.sin((i + cameraY) * 0.02) * 15);
+        ctx.fillRect(0, i + (cameraY % 40) * -0.5, playWidth, 6);
+    }
+}
+
+// ポップなブロックの描画（丸み・ツヤ・グラデーション）
+function drawPopBlock(block, drawX, drawY, drawSize) {
+    const radius = 6;
+    const palette = COLOR_PALETTES[block.color] || { top: block.color, main: block.color, bottom: block.color };
+
+    // ブロックグラデーション（ぷっくり感）
+    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawSize);
+    grad.addColorStop(0, palette.top);
+    grad.addColorStop(0.5, palette.main);
+    grad.addColorStop(1, palette.bottom);
+
+    ctx.fillStyle = grad;
+    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    ctx.fill();
+
+    // 内側のハイライト（ポップなツヤ感）
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    drawRoundRect(drawX + 3, drawY + 3, drawSize - 6, (drawSize - 6) / 3, 3);
+    ctx.fill();
+
+    // 接続輪郭線（ポップな線画）
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.lineWidth = 2;
+    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    ctx.stroke();
+}
+
+// AIRカプセルを描画（ポップなデザイン）
+function drawAirCapsule(drawX, drawY, drawSize) {
+    const radius = 10;
+    // カプセル本体（ホワイト＆スカイブルー）
+    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawSize);
+    grad.addColorStop(0, '#E0F7FA');
+    grad.addColorStop(0.5, '#00E5FF');
+    grad.addColorStop(1, '#00B0FF');
+
+    ctx.fillStyle = grad;
+    drawRoundRect(drawX + 2, drawY + 2, drawSize - 4, drawSize - 4, radius);
+    ctx.fill();
+
+    // 外枠
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2;
+    drawRoundRect(drawX + 2, drawY + 2, drawSize - 4, drawSize - 4, radius);
+    ctx.stroke();
+
+    // アイコン / 文字「AIR」
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '900 12px "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#00838F';
+    ctx.shadowBlur = 4;
+    ctx.fillText('AIR', drawX + drawSize / 2, drawY + drawSize / 2);
+    ctx.shadowBlur = 0;
+}
+
+// ペナルティブロックを描画（ハードなXデザイン）
+function drawPenaltyBlock(block, drawX, drawY, drawSize) {
+    const radius = 4;
+    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawSize);
+    grad.addColorStop(0, '#616161');
+    grad.addColorStop(1, '#212121');
+
+    ctx.fillStyle = grad;
+    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    ctx.fill();
+
+    // 枠線
+    ctx.strokeStyle = '#9E9E9E';
+    ctx.lineWidth = 1.5;
+    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    ctx.stroke();
+
+    // 赤い「X」印とHP
+    ctx.fillStyle = '#FF5252';
+    ctx.font = '900 13px "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 3;
+    ctx.fillText(`✕ ${block.hp}`, drawX + drawSize / 2, drawY + drawSize / 2);
+    ctx.shadowBlur = 0;
+}
+
+// ポップなキャラクター（プレイヤー）の描画
+function drawPlayer() {
+    const px = player.x * BLOCK_SIZE;
+    const py = player.y * BLOCK_SIZE - cameraY;
+    const centerX = px + BLOCK_SIZE / 2;
+    const centerY = py + BLOCK_SIZE / 2;
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+
+    // キャラクター本体（丸っこいポップボディ）
+    ctx.fillStyle = '#FF9F43'; // 明るいオレンジ
+    ctx.beginPath();
+    ctx.arc(0, 1, 13, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ヘルメット（イエローキャップ）
+    ctx.fillStyle = '#FFD32A';
+    ctx.beginPath();
+    ctx.arc(0, -3, 13, Math.PI, 0);
+    ctx.fill();
+
+    // ヘルメットのバイザー/つば
+    ctx.fillStyle = '#FFA801';
+    ctx.fillRect(-12, -4, 24, 3);
+
+    // ドリル（向きに応じた取り付け）
+    ctx.fillStyle = '#D1CCC0';
+    ctx.strokeStyle = '#84817A';
+    ctx.lineWidth = 1.5;
+
+    let drillX = 0, drillY = 0, angle = 0;
+    switch (player.direction) {
+        case 'up': drillY = -16; angle = -Math.PI / 2; break;
+        case 'down': drillY = 16; angle = Math.PI / 2; break;
+        case 'left': drillX = -16; angle = Math.PI; break;
+        case 'right': drillX = 16; angle = 0; break;
+    }
+
+    ctx.save();
+    ctx.translate(drillX, drillY);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(-4, -6);
+    ctx.lineTo(-4, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // つぶらな大きい瞳
+    ctx.fillStyle = '#FFFFFF';
+    let eyeOffsetX = 0, eyeOffsetY = 3;
+    if (player.direction === 'left') eyeOffsetX = -3;
+    if (player.direction === 'right') eyeOffsetX = 3;
+    if (player.direction === 'up') eyeOffsetY = 0;
+    if (player.direction === 'down') eyeOffsetY = 5;
+
+    // 左目
+    ctx.beginPath();
+    ctx.arc(-4 + eyeOffsetX, eyeOffsetY, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    // 右目
+    ctx.beginPath();
+    ctx.arc(4 + eyeOffsetX, eyeOffsetY, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 黒目
+    ctx.fillStyle = '#1E272C';
+    ctx.beginPath();
+    ctx.arc(-4 + eyeOffsetX, eyeOffsetY, 2, 0, Math.PI * 2);
+    ctx.arc(4 + eyeOffsetX, eyeOffsetY, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // ハイライト（キラキラ）
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(-5 + eyeOffsetX, eyeOffsetY - 1, 1, 0, Math.PI * 2);
+    ctx.arc(3 + eyeOffsetX, eyeOffsetY - 1, 1, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+}
+
 // スタート画面描画
 function drawStartScreen() {
-    ctx.fillStyle = '#111';
+    // 背景
+    const bgGrad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    bgGrad.addColorStop(0, '#1e1b4b');
+    bgGrad.addColorStop(1, '#312e81');
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // タイトル背景デザイン
-    ctx.fillStyle = '#222';
-    ctx.fillRect(20, 20, canvas.width - 40, canvas.height - 40);
+    // ポップなフレーム
+    ctx.strokeStyle = '#FF79C6';
+    ctx.lineWidth = 6;
+    drawRoundRect(15, 15, canvas.width - 30, canvas.height - 30, 16);
+    ctx.stroke();
 
     // タイトルロゴ
-    ctx.fillStyle = '#FFD700';
-    ctx.font = '900 42px "Arial Black", sans-serif';
+    ctx.fillStyle = '#FFD166';
+    ctx.font = '900 46px "Arial Black", sans-serif';
     ctx.textAlign = 'center';
-    ctx.shadowColor = '#FF5733';
-    ctx.shadowBlur = 10;
-    ctx.fillText('MR. DRILLER', canvas.width / 2, 130);
+    ctx.shadowColor = '#FF4757';
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetY = 4;
+    ctx.fillText('MR. DRILLER', canvas.width / 2, 120);
     ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
 
     // サブタイトル / 目標
-    ctx.fillStyle = '#00FFFF';
+    ctx.fillStyle = '#00E5FF';
     ctx.font = 'bold 20px Arial';
-    ctx.fillText('〜 地下 500m を目指せ！ 〜', canvas.width / 2, 180);
+    ctx.fillText('✨ 地下 500m を目指せ！ ✨', canvas.width / 2, 170);
 
-    // ルール・操作説明
+    // ルール・操作説明パネル
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    drawRoundRect(50, 200, canvas.width - 100, 310, 16);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 2;
+    drawRoundRect(50, 200, canvas.width - 100, 310, 16);
+    ctx.stroke();
+
     ctx.fillStyle = '#FFF';
-    ctx.font = '16px Arial';
+    ctx.font = 'bold 15px Arial';
     ctx.textAlign = 'left';
-    const startX = 100;
-    let textY = 240;
+    const startX = 75;
+    let textY = 235;
 
-    ctx.fillText('【操作方法】', startX, textY); textY += 30;
-    ctx.fillText('・矢印キー / D-PAD : プレイヤー移動', startX + 20, textY); textY += 25;
-    ctx.fillText('・スペースキー / DIGボタン : ブロック消去', startX + 20, textY); textY += 35;
+    ctx.fillStyle = '#FF79C6';
+    ctx.fillText('【 操作方法 】', startX, textY); textY += 28;
+    ctx.fillStyle = '#FFF';
+    ctx.fillText('・ 矢印キー / D-PAD : プレイヤー移動', startX + 10, textY); textY += 24;
+    ctx.fillText('・ スペースキー / DIGボタン : ブロック消去', startX + 10, textY); textY += 34;
 
-    ctx.fillText('【ルール】', startX, textY); textY += 30;
-    ctx.fillText('・同じ色のブロックを掘ると一括消去！', startX + 20, textY); textY += 25;
-    ctx.fillText('・4つ以上結合したブロックは落下着地で消滅！', startX + 20, textY); textY += 25;
-    ctx.fillText('・AIRカプセルを取って酸素を補給！', startX + 20, textY); textY += 25;
-    ctx.fillText('・ペナルティ(X)は5回掘ると破壊(AIR-20%)！', startX + 20, textY); textY += 25;
-    ctx.fillText('・地下500mのゴールに到達すればクリア！', startX + 20, textY); textY += 35;
+    ctx.fillStyle = '#FFD166';
+    ctx.fillText('【 ルール 】', startX, textY); textY += 28;
+    ctx.fillStyle = '#FFF';
+    ctx.fillText('・ 同じ色のブロックを掘ると一括消去！', startX + 10, textY); textY += 24;
+    ctx.fillText('・ 4つ以上結合したブロックは落下着地で消滅！', startX + 10, textY); textY += 24;
+    ctx.fillText('・ AIRカプセルを取って酸素を補給！', startX + 10, textY); textY += 24;
+    ctx.fillText('・ ペナルティ(✕)は5回掘ると破壊(AIR-20%)！', startX + 10, textY); textY += 24;
+    ctx.fillText('・ 地下500mのゴールに到達すればクリア！', startX + 10, textY); textY += 35;
 
     // スタート案内（点滅）
     ctx.textAlign = 'center';
-    if (Math.floor(Date.now() / 500) % 2 === 0) {
-        ctx.fillStyle = '#FF5733';
-        ctx.font = 'bold 24px Arial';
-        ctx.fillText('PRESS SPACE OR DIG TO START', canvas.width / 2, 560);
+    if (Math.floor(Date.now() / 400) % 2 === 0) {
+        ctx.fillStyle = '#FF4757';
+        ctx.font = '900 22px "Arial Black", sans-serif';
+        ctx.fillText('PRESS SPACE OR DIG TO START', canvas.width / 2, 570);
     }
 }
 
 // ゲーム画面描画
 function drawGame() {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // 背景描画
+    drawBackground();
 
     // 描画範囲の決定
     const startRow = Math.max(0, Math.floor(cameraY / BLOCK_SIZE) - 1);
@@ -403,7 +832,8 @@ function drawGame() {
                 if (block.type === 'goal') {
                     // ゴールブロック描画
                     ctx.fillStyle = '#FFD700';
-                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
+                    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, 4);
+                    ctx.fill();
                     ctx.fillStyle = '#000';
                     ctx.font = 'bold 12px Arial';
                     ctx.textAlign = 'center';
@@ -431,61 +861,11 @@ function drawGame() {
                 }
 
                 if (block.type === 'air') {
-                    // AIRカプセル描画
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
-
-                    ctx.fillStyle = '#0000FF';
-                    ctx.font = 'bold 12px Arial';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText('AIR', drawX + drawSize/2, drawY + drawSize/2);
-
-                    ctx.strokeStyle = '#222';
-                    ctx.strokeRect(drawX, drawY, drawSize, drawSize);
+                    drawAirCapsule(drawX, drawY, drawSize);
+                } else if (block.type === 'penalty') {
+                    drawPenaltyBlock(block, drawX, drawY, drawSize);
                 } else {
-                    // 通常ブロックまたはペナルティブロック
-                    ctx.fillStyle = block.type === 'penalty' ? '#555555' : block.color;
-                    ctx.fillRect(drawX, drawY, drawSize, drawSize);
-
-                    if (block.type === 'penalty' && block.state !== 'clearing') {
-                        ctx.fillStyle = '#FF4444';
-                        ctx.font = 'bold 12px Arial';
-                        ctx.textAlign = 'center';
-                        ctx.textBaseline = 'middle';
-                        ctx.fillText(`X (${block.hp})`, drawX + drawSize/2, drawY + drawSize/2);
-                    }
-
-                    if (block.state === 'clearing') {
-                        ctx.strokeStyle = '#222';
-                        ctx.strokeRect(drawX, drawY, drawSize, drawSize);
-                    } else {
-                        const topConnected = y > 0 && isSameBlock(block, grid[y-1][x]);
-                        const bottomConnected = y < ROWS - 1 && isSameBlock(block, grid[y+1][x]);
-                        const leftConnected = x > 0 && isSameBlock(block, grid[y][x-1]);
-                        const rightConnected = x < COLS - 1 && isSameBlock(block, grid[y][x+1]);
-
-                        ctx.strokeStyle = '#222';
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        if (!topConnected) {
-                            ctx.moveTo(drawX, drawY);
-                            ctx.lineTo(drawX + drawSize, drawY);
-                        }
-                        if (!bottomConnected) {
-                            ctx.moveTo(drawX, drawY + drawSize);
-                            ctx.lineTo(drawX + drawSize, drawY + drawSize);
-                        }
-                        if (!leftConnected) {
-                            ctx.moveTo(drawX, drawY);
-                            ctx.lineTo(drawX, drawY + drawSize);
-                        }
-                        if (!rightConnected) {
-                            ctx.moveTo(drawX + drawSize, drawY);
-                            ctx.lineTo(drawX + drawSize, drawY + drawSize);
-                        }
-                        ctx.stroke();
-                    }
+                    drawPopBlock(block, drawX, drawY, drawSize);
                 }
 
                 ctx.globalAlpha = 1.0;
@@ -494,124 +874,132 @@ function drawGame() {
     }
 
     // プレイヤーの描画
-    ctx.fillStyle = player.color;
-    const playerPadding = 4;
-    const px = player.x * BLOCK_SIZE + playerPadding;
-    const py = player.y * BLOCK_SIZE - cameraY + playerPadding;
-    const pSize = BLOCK_SIZE - playerPadding * 2;
-
-    ctx.fillRect(px, py, pSize, pSize);
-
-    // プレイヤーの目の描画（向き指示）
-    ctx.fillStyle = '#000';
-    const eyeSize = 4;
-    let eyeX = px + pSize / 2 - eyeSize / 2;
-    let eyeY = py + pSize / 2 - eyeSize / 2;
-
-    switch(player.direction) {
-        case 'up': eyeY -= 8; break;
-        case 'down': eyeY += 8; break;
-        case 'left': eyeX -= 8; break;
-        case 'right': eyeX += 8; break;
-    }
-    ctx.fillRect(eyeX, eyeY, eyeSize, eyeSize);
+    drawPlayer();
 
     // --- UI描画 (右側エリア) ---
     const uiX = 480;
     const uiWidth = 100;
 
-    // UI背景
-    ctx.fillStyle = '#222';
+    // UI背景（半透明ポップグラデーション）
+    const uiGrad = ctx.createLinearGradient(uiX, 0, uiX + uiWidth, canvas.height);
+    uiGrad.addColorStop(0, '#0f0f1b');
+    uiGrad.addColorStop(1, '#1a1a2e');
+    ctx.fillStyle = uiGrad;
     ctx.fillRect(uiX, 0, uiWidth, canvas.height);
 
+    ctx.strokeStyle = '#FF79C6';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(uiX, 0);
+    ctx.lineTo(uiX, canvas.height);
+    ctx.stroke();
+
     // AIRゲージ枠
-    const gaugeX = uiX + 25;
-    const gaugeY = 60;
-    const gaugeW = 30;
+    const gaugeX = uiX + 30;
+    const gaugeY = 50;
+    const gaugeW = 24;
     const gaugeH = 260;
 
-    ctx.strokeStyle = '#FFF';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(gaugeX, gaugeY, gaugeW, gaugeH);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    drawRoundRect(gaugeX, gaugeY, gaugeW, gaugeH, 12);
+    ctx.fill();
+
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2.5;
+    drawRoundRect(gaugeX, gaugeY, gaugeW, gaugeH, 12);
+    ctx.stroke();
 
     // AIRラベル
-    ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 16px Arial';
+    ctx.fillStyle = '#00E5FF';
+    ctx.font = '900 16px "Arial Black", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('AIR', gaugeX + gaugeW/2, gaugeY - 10);
+    ctx.fillText('AIR', gaugeX + gaugeW / 2, gaugeY - 12);
 
     // AIR残量バー
-    const airHeight = (air / MAX_AIR) * gaugeH;
-    const airY = gaugeY + (gaugeH - airHeight);
+    const airHeight = Math.max(0, (air / MAX_AIR) * (gaugeH - 6));
+    const airY = gaugeY + gaugeH - 3 - airHeight;
 
+    let airColor1 = '#00E5FF', airColor2 = '#1E90FF';
     if (air <= 20) {
         if (Math.floor(Date.now() / 200) % 2 === 0) {
-            ctx.fillStyle = '#FF0000';
+            airColor1 = '#FF4757'; airColor2 = '#FF6B81';
         } else {
-            ctx.fillStyle = '#880000';
+            airColor1 = '#C02E3D'; airColor2 = '#880000';
         }
-    } else {
-        ctx.fillStyle = '#00FFFF';
     }
-    ctx.fillRect(gaugeX + 1, airY, gaugeW - 2, airHeight);
+
+    const airGrad = ctx.createLinearGradient(gaugeX, airY, gaugeX, airY + airHeight);
+    airGrad.addColorStop(0, airColor1);
+    airGrad.addColorStop(1, airColor2);
+    ctx.fillStyle = airGrad;
+    if (airHeight > 0) {
+        drawRoundRect(gaugeX + 3, airY, gaugeW - 6, airHeight, 8);
+        ctx.fill();
+    }
 
     // AIR数値表示
     ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 14px Arial';
-    ctx.fillText(Math.floor(air) + '%', gaugeX + gaugeW/2, gaugeY + gaugeH + 20);
+    ctx.font = 'bold 15px Arial';
+    ctx.fillText(Math.floor(air) + '%', gaugeX + gaugeW / 2, gaugeY + gaugeH + 24);
 
     // 深さ(DEPTH)表示
-    const depthY = gaugeY + gaugeH + 70;
-    ctx.fillStyle = '#FFD700';
-    ctx.font = 'bold 14px Arial';
-    ctx.fillText('DEPTH', uiX + uiWidth/2, depthY);
+    const depthY = gaugeY + gaugeH + 75;
+    ctx.fillStyle = '#FFD166';
+    ctx.font = '900 14px "Arial Black", sans-serif';
+    ctx.fillText('DEPTH', uiX + uiWidth / 2, depthY);
 
     ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 20px Arial';
-    ctx.fillText(`${player.y}m`, uiX + uiWidth/2, depthY + 30);
+    ctx.font = '900 22px Arial';
+    ctx.fillText(`${player.y}m`, uiX + uiWidth / 2, depthY + 30);
 
     ctx.fillStyle = '#888';
     ctx.font = '12px Arial';
-    ctx.fillText(`/ ${GOAL_DEPTH}m`, uiX + uiWidth/2, depthY + 50);
+    ctx.fillText(`/ ${GOAL_DEPTH}m`, uiX + uiWidth / 2, depthY + 52);
 
     // オーバーレイ表示（ゲームオーバー / ゲームクリア）
     if (gameState === STATE_GAMEOVER) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillStyle = 'rgba(15, 15, 27, 0.85)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = '#FF3333';
-        ctx.font = 'bold 44px Arial';
+        ctx.fillStyle = '#FF4757';
+        ctx.font = '900 44px "Arial Black", sans-serif';
         ctx.textAlign = 'center';
+        ctx.shadowColor = '#000';
+        ctx.shadowBlur = 10;
         ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 30);
+        ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#FFF';
         ctx.font = 'bold 20px Arial';
         ctx.fillText(`到達深さ: ${player.y} m`, canvas.width / 2, canvas.height / 2 + 20);
 
         if (stateChangeCooldown <= 0 && Math.floor(Date.now() / 400) % 2 === 0) {
-            ctx.fillStyle = '#FFFF00';
+            ctx.fillStyle = '#FFD166';
             ctx.font = 'bold 18px Arial';
             ctx.fillText('PRESS ANY KEY TO RETURN', canvas.width / 2, canvas.height / 2 + 80);
         }
     } else if (gameState === STATE_GAMECLEAR) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillStyle = 'rgba(15, 15, 27, 0.85)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        ctx.fillStyle = '#FFD700';
-        ctx.font = 'bold 44px Arial';
+        ctx.fillStyle = '#FFD166';
+        ctx.font = '900 44px "Arial Black", sans-serif';
         ctx.textAlign = 'center';
+        ctx.shadowColor = '#FF4757';
+        ctx.shadowBlur = 10;
         ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 40);
+        ctx.shadowBlur = 0;
 
-        ctx.fillStyle = '#00FFFF';
+        ctx.fillStyle = '#00E5FF';
         ctx.font = 'bold 24px Arial';
-        ctx.fillText('地下 500m 到達おめでとう！', canvas.width / 2, canvas.height / 2 + 10);
+        ctx.fillText('🎉 地下 500m 到達おめでとう！ 🎉', canvas.width / 2, canvas.height / 2 + 10);
 
         ctx.fillStyle = '#FFF';
         ctx.font = '18px Arial';
         ctx.fillText(`残りAIR: ${Math.floor(air)}%`, canvas.width / 2, canvas.height / 2 + 50);
 
         if (stateChangeCooldown <= 0 && Math.floor(Date.now() / 400) % 2 === 0) {
-            ctx.fillStyle = '#FFFF00';
+            ctx.fillStyle = '#FFD166';
             ctx.font = 'bold 18px Arial';
             ctx.fillText('PRESS ANY KEY TO RETURN', canvas.width / 2, canvas.height / 2 + 110);
         }
@@ -743,6 +1131,7 @@ function checkAirUnderPlayer() {
         if (block && block.type === 'air') {
             grid[belowY][player.x] = null;
             air = Math.min(air + 20, MAX_AIR);
+            playAirSE();
             needsRedraw = true;
         }
     }
@@ -756,6 +1145,7 @@ function updatePlayerGravity() {
             if (player.y >= GOAL_DEPTH) {
                 gameState = STATE_GAMECLEAR;
                 stateChangeCooldown = 40;
+                playGameClearSE();
             }
             return true;
         }
@@ -821,6 +1211,7 @@ function updateBlockGravity() {
                     if (player.x === x && player.y === y + 1) {
                         air = Math.min(air + 20, MAX_AIR);
                         grid[y][x] = null;
+                        playAirSE();
                         moved = true;
                     } else {
                         grid[y + 1][x] = block;
@@ -882,6 +1273,7 @@ function updateBlockGravity() {
                 if (player.x === item.x && player.y === newY) {
                     gameState = STATE_GAMEOVER;
                     stateChangeCooldown = 30;
+                    playGameOverSE();
                 }
                 grid[newY][item.x] = item.block;
             }
@@ -890,12 +1282,17 @@ function updateBlockGravity() {
         } else if (isSupported) {
             let hasFallen = cluster.some(p => grid[p.y][p.x] && grid[p.y][p.x].hasFallen);
             if (hasFallen && cluster.length >= 4) {
+                let clearedAny = false;
                 for (let p of cluster) {
                     let b = grid[p.y][p.x];
                     if (b && b.state !== 'clearing') {
                         b.state = 'clearing';
                         b.timer = 15;
+                        clearedAny = true;
                     }
+                }
+                if (clearedAny) {
+                    playClearSE();
                 }
             }
         }

@@ -1,5 +1,6 @@
 body {
-    background-color: #333;
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
+    font-family: "Fredoka", "M PLUS Rounded 1c", "Arial Round", sans-serif;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -10,13 +11,48 @@ body {
 }
 
 #game-container {
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+    position: relative;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6), 0 0 15px rgba(255, 105, 180, 0.3);
     margin-bottom: 20px;
     max-width: 100%;
+    border-radius: 20px;
+    overflow: hidden;
+    border: 4px solid #ff79c6;
+    background-color: #1a1a2e;
+}
+
+#mute-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 100;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 2px solid #ffd166;
+    background: linear-gradient(145deg, #ff6b6b, #ee5253);
+    color: #fff;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+    transition: transform 0.15s, background 0.2s, box-shadow 0.2s;
+    outline: none;
+}
+
+#mute-btn:hover {
+    transform: scale(1.12);
+    box-shadow: 0 6px 14px rgba(255, 209, 102, 0.5);
+}
+
+#mute-btn:active {
+    transform: scale(0.92);
 }
 
 canvas {
-    background-color: #000;
+    background-color: #0f0f1b;
     display: block;
     max-width: 100%;
     height: auto;
@@ -24,16 +60,21 @@ canvas {
 
 #controls {
     display: flex;
-    gap: 40px;
+    gap: 30px;
     align-items: center;
-    padding: 10px;
+    padding: 15px 25px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
 }
 
 #dpad {
     display: grid;
     grid-template-columns: repeat(3, 60px);
     grid-template-rows: repeat(3, 60px);
-    gap: 5px;
+    gap: 6px;
     align-items: center;
     justify-items: center;
 }
@@ -46,9 +87,9 @@ canvas {
 .control-btn {
     width: 60px;
     height: 60px;
-    border: none;
-    border-radius: 10px;
-    background-color: #555;
+    border: 3px solid #fff;
+    border-radius: 18px;
+    background: linear-gradient(145deg, #4834d4, #686de0);
     color: white;
     font-size: 24px;
     font-weight: bold;
@@ -56,23 +97,33 @@ canvas {
     user-select: none;
     -webkit-user-select: none; /* Safari */
     touch-action: manipulation;
+    box-shadow: 0 6px 0 #241372, 0 8px 12px rgba(0,0,0,0.3);
+    transition: transform 0.05s, box-shadow 0.05s;
 }
 
 .control-btn:active {
-    background-color: #777;
-    transform: scale(0.95);
+    transform: translateY(4px);
+    box-shadow: 0 2px 0 #241372, 0 3px 6px rgba(0,0,0,0.3);
+    background: linear-gradient(145deg, #3824b4, #585dc0);
 }
 
 .big-btn {
     width: 100px;
     height: 100px;
     border-radius: 50%;
-    background-color: #d32f2f;
-    font-size: 20px;
+    border: 4px solid #fff;
+    background: linear-gradient(145deg, #ff4757, #ff6b81);
+    font-size: 22px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    box-shadow: 0 8px 0 #b32b3b, 0 10px 15px rgba(0,0,0,0.4);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
 .big-btn:active {
-    background-color: #f44336;
+    transform: translateY(6px);
+    box-shadow: 0 2px 0 #b32b3b, 0 4px 8px rgba(0,0,0,0.4);
+    background: linear-gradient(145deg, #e03747, #f05b71);
 }
 
 @media (max-width: 600px) {
