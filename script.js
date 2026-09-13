@@ -619,8 +619,25 @@ function drawPopBlock(block, drawX, drawY, drawSize, gx, gy) {
     const rbr = (!hasDown && !hasRight) ? r : 0;
     const rbl = (!hasDown && !hasLeft) ? r : 0;
 
-    // ブロック本体グラデーション描画
-    const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawSize);
+    // 縦方向の連続結合範囲（グラデーションの波打ち防止）を算出
+    let topBoundaryY = drawY;
+    let bottomBoundaryY = drawY + drawSize;
+
+    if (gy !== undefined && gx !== undefined) {
+        let checkY = gy - 1;
+        while (checkY >= 0 && isSameBlock(block, grid[checkY][gx])) {
+            topBoundaryY -= BLOCK_SIZE;
+            checkY--;
+        }
+        checkY = gy + 1;
+        while (checkY < ROWS && isSameBlock(block, grid[checkY][gx])) {
+            bottomBoundaryY += BLOCK_SIZE;
+            checkY++;
+        }
+    }
+
+    // ブロック本体グラデーション描画（連結領域全体をカバーするスムーズグラデーション）
+    const grad = ctx.createLinearGradient(drawX, topBoundaryY, drawX, bottomBoundaryY);
     grad.addColorStop(0, palette.top);
     grad.addColorStop(0.5, palette.main);
     grad.addColorStop(1, palette.bottom);
