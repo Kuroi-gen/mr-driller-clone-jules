@@ -16,6 +16,7 @@ const FALL_DELAY_FRAMES = 24;        // ブロック落下の溜め（猶予時�
 const MAX_AIR = 100;
 const AIR_DECREASE_RATE = 0.03; // 1フレームあたりの減少量
 const AIR_CAPSULE_CHANCE = 0.05; // AIRカプセルの出現確率
+const PENALTY_BLOCK_CHANCE = 0.08; // ペナルティブロックの出現確率
 
 // ゲームの状態定義
 const STATE_START = 'START';
@@ -85,9 +86,11 @@ function startNewGame() {
             } else {
                 if (Math.random() < AIR_CAPSULE_CHANCE) {
                     row.push({ type: 'air', state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false });
+                } else if (Math.random() < PENALTY_BLOCK_CHANCE) {
+                    row.push({ type: 'penalty', hp: 5, color: '#555555', state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false, hasFallen: false });
                 } else {
                     const color = COLORS[Math.floor(Math.random() * COLORS.length)];
-                    row.push({ type: 'block', color: color, state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false });
+                    row.push({ type: 'block', color: color, state: 'normal', timer: 0, fallDelay: FALL_DELAY_FRAMES, isUnsupported: false, hasFallen: false });
                 }
             }
         }
@@ -257,6 +260,16 @@ function dig() {
         if (targetBlock) {
             if (targetBlock.type === 'air') {
                 grid[targetY][targetX] = null;
+            } else if (targetBlock.type === 'penalty') {
+                targetBlock.hp--;
+                if (targetBlock.hp <= 0) {
+                    grid[targetY][targetX] = null;
+                    air = Math.max(0, air - 20);
+                    if (air <= 0) {
+                        gameState = STATE_GAMEOVER;
+                        stateChangeCooldown = 30;
+                    }
+                }
             } else if (targetBlock.type === 'block') {
                 const color = targetBlock.color;
                 const stack = [{x: targetX, y: targetY}];
@@ -293,9 +306,12 @@ function dig() {
     }
 }
 
-// 同色ブロック判定補助関数
-function isSameColorBlock(b, color) {
-    return b && b.type === 'block' && b.color === color && b.state !== 'clearing';
+// 同種・結合ブロック判定補助関数
+function isSameBlock(b1, b2) {
+    if (!b1 || !b2 || b1.state === 'clearing' || b2.state === 'clearing') return false;
+    if (b1.type === 'block' && b2.type === 'block') return b1.color === b2.color;
+    if (b1.type === 'penalty' && b2.type === 'penalty') return true;
+    return false;
 }
 
 // カメラ位置の更新
@@ -352,9 +368,10 @@ function drawStartScreen() {
 
     ctx.fillText('【ルール】', startX, textY); textY += 30;
     ctx.fillText('・同じ色のブロックを掘ると一括消去！', startX + 20, textY); textY += 25;
+    ctx.fillText('・4つ以上結合したブロックは落下着地で消滅！', startX + 20, textY); textY += 25;
     ctx.fillText('・AIRカプセルを取って酸素を補給！', startX + 20, textY); textY += 25;
-    ctx.fillText('・落下してくるブロックに潰されるとミス！', startX + 20, textY); textY += 25;
-    ctx.fillText('・地下500mのゴールに到達すればクリア！', startX + 20, textY); textY += 45;
+    ctx.fillText('・ペナルティ(X)は5回掘ると破壊(AIR-20%)！', startX + 20, textY); textY += 25;
+    ctx.fillText('・地下500mのゴールに到達すればクリア！', startX + 20, textY); textY += 35;
 
     // スタート案内（点滅）
     ctx.textAlign = 'center';
@@ -427,18 +444,26 @@ function drawGame() {
                     ctx.strokeStyle = '#222';
                     ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                 } else {
-                    // 通常ブロック
-                    ctx.fillStyle = block.color;
+                    // 通常ブロックまたはペナルティブロック
+                    ctx.fillStyle = block.type === 'penalty' ? '#555555' : block.color;
                     ctx.fillRect(drawX, drawY, drawSize, drawSize);
+
+                    if (block.type === 'penalty' && block.state !== 'clearing') {
+                        ctx.fillStyle = '#FF4444';
+                        ctx.font = 'bold 12px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(`X (${block.hp})`, drawX + drawSize/2, drawY + drawSize/2);
+                    }
 
                     if (block.state === 'clearing') {
                         ctx.strokeStyle = '#222';
                         ctx.strokeRect(drawX, drawY, drawSize, drawSize);
                     } else {
-                        const topConnected = y > 0 && isSameColorBlock(grid[y-1][x], block.color);
-                        const bottomConnected = y < ROWS - 1 && isSameColorBlock(grid[y+1][x], block.color);
-                        const leftConnected = x > 0 && isSameColorBlock(grid[y][x-1], block.color);
-                        const rightConnected = x < COLS - 1 && isSameColorBlock(grid[y][x+1], block.color);
+                        const topConnected = y > 0 && isSameBlock(block, grid[y-1][x]);
+                        const bottomConnected = y < ROWS - 1 && isSameBlock(block, grid[y+1][x]);
+                        const leftConnected = x > 0 && isSameBlock(block, grid[y][x-1]);
+                        const rightConnected = x < COLS - 1 && isSameBlock(block, grid[y][x+1]);
 
                         ctx.strokeStyle = '#222';
                         ctx.lineWidth = 1;
@@ -686,6 +711,7 @@ function update() {
         }
     }
 
+    checkAirUnderPlayer();
     updateClearingBlocks();
     updateFallDelays();
 
@@ -705,6 +731,20 @@ function update() {
             needsRedraw = true;
         }
         blockFrameCount = 0;
+    }
+}
+
+// プレイヤーの真下にあるAIRを自動取得する関数
+function checkAirUnderPlayer() {
+    if (gameState !== STATE_PLAYING) return;
+    const belowY = player.y + 1;
+    if (belowY < ROWS && grid[belowY] && grid[belowY][player.x]) {
+        const block = grid[belowY][player.x];
+        if (block && block.type === 'air') {
+            grid[belowY][player.x] = null;
+            air = Math.min(air + 20, MAX_AIR);
+            needsRedraw = true;
+        }
     }
 }
 
@@ -737,7 +777,6 @@ function getClusters(minY = 0, maxY = ROWS) {
             if (!block || visited[y][x] || block.state === 'clearing' || block.type === 'air' || block.type === 'goal') continue;
 
             let cluster = [];
-            let color = block.color;
             let stack = [{x, y}];
             visited[y][x] = true;
 
@@ -752,11 +791,7 @@ function getClusters(minY = 0, maxY = ROWS) {
 
                     if (nx >= 0 && nx < COLS && ny >= 0 && ny < ROWS) {
                         const nextBlock = grid[ny][nx];
-                        if (!visited[ny][nx] && nextBlock &&
-                            nextBlock.type === 'block' &&
-                            nextBlock.color === color &&
-                            nextBlock.state !== 'clearing') {
-
+                        if (!visited[ny][nx] && nextBlock && isSameBlock(block, nextBlock)) {
                             visited[ny][nx] = true;
                             stack.push({x: nx, y: ny});
                         }
@@ -843,6 +878,7 @@ function updateBlockGravity() {
 
             for (let item of blocksToMove) {
                 let newY = item.y + 1;
+                item.block.hasFallen = true;
                 if (player.x === item.x && player.y === newY) {
                     gameState = STATE_GAMEOVER;
                     stateChangeCooldown = 30;
@@ -851,6 +887,17 @@ function updateBlockGravity() {
             }
 
             moved = true;
+        } else if (isSupported) {
+            let hasFallen = cluster.some(p => grid[p.y][p.x] && grid[p.y][p.x].hasFallen);
+            if (hasFallen && cluster.length >= 4) {
+                for (let p of cluster) {
+                    let b = grid[p.y][p.x];
+                    if (b && b.state !== 'clearing') {
+                        b.state = 'clearing';
+                        b.timer = 15;
+                    }
+                }
+            }
         }
     }
 
