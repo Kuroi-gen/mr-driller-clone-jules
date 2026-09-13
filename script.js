@@ -537,6 +537,29 @@ function drawRoundRect(x, y, width, height, radius) {
     ctx.closePath();
 }
 
+// 可変角丸矩形描画ヘルパー関数 (Top-Left, Top-Right, Bottom-Right, Bottom-Left)
+function drawVariableRoundRect(x, y, width, height, rtl, rtr, rbr, rbl) {
+    ctx.beginPath();
+    ctx.moveTo(x + rtl, y);
+    ctx.lineTo(x + width - rtr, y);
+    if (rtr > 0) ctx.quadraticCurveTo(x + width, y, x + width, y + rtr);
+    else ctx.lineTo(x + width, y);
+
+    ctx.lineTo(x + width, y + height - rbr);
+    if (rbr > 0) ctx.quadraticCurveTo(x + width, y + height, x + width - rbr, y + height);
+    else ctx.lineTo(x + width, y + height);
+
+    ctx.lineTo(x + rbl, y + height);
+    if (rbl > 0) ctx.quadraticCurveTo(x, y + height, x, y + height - rbl);
+    else ctx.lineTo(x, y + height);
+
+    ctx.lineTo(x, y + rtl);
+    if (rtl > 0) ctx.quadraticCurveTo(x, y, x + rtl, y);
+    else ctx.lineTo(x, y);
+
+    ctx.closePath();
+}
+
 // ポップな背景の描画（深さに応じてグラデーション＆地層模様が変化）
 function drawBackground() {
     const playWidth = COLS * BLOCK_SIZE; // 480px
@@ -571,30 +594,91 @@ function drawBackground() {
     }
 }
 
-// ポップなブロックの描画（丸み・ツヤ・グラデーション）
-function drawPopBlock(block, drawX, drawY, drawSize) {
-    const radius = 6;
+// ポップなブロックの描画（結合時のシームレス連結対応）
+function drawPopBlock(block, drawX, drawY, drawSize, gx, gy) {
+    const r = 6;
     const palette = COLOR_PALETTES[block.color] || { top: block.color, main: block.color, bottom: block.color };
 
-    // ブロックグラデーション（ぷっくり感）
+    // 隣接同色ブロックの有無を判定
+    const hasUp = (gy !== undefined && gy > 0) ? isSameBlock(block, grid[gy - 1][gx]) : false;
+    const hasDown = (gy !== undefined && gy < ROWS - 1) ? isSameBlock(block, grid[gy + 1][gx]) : false;
+    const hasLeft = (gx !== undefined && gx > 0) ? isSameBlock(block, grid[gy][gx - 1]) : false;
+    const hasRight = (gx !== undefined && gx < COLS - 1) ? isSameBlock(block, grid[gy][gx + 1]) : false;
+
+    // 境界座標の計算（隣接面は隙間なくぴったり拡張）
+    const left = hasLeft ? drawX : drawX + 1;
+    const top = hasUp ? drawY : drawY + 1;
+    const right = hasRight ? drawX + drawSize : drawX + drawSize - 1;
+    const bottom = hasDown ? drawY + drawSize : drawY + drawSize - 1;
+    const width = right - left;
+    const height = bottom - top;
+
+    // 角丸半径（隣接ブロックがない外角のみ丸める）
+    const rtl = (!hasUp && !hasLeft) ? r : 0;
+    const rtr = (!hasUp && !hasRight) ? r : 0;
+    const rbr = (!hasDown && !hasRight) ? r : 0;
+    const rbl = (!hasDown && !hasLeft) ? r : 0;
+
+    // ブロック本体グラデーション描画
     const grad = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawSize);
     grad.addColorStop(0, palette.top);
     grad.addColorStop(0.5, palette.main);
     grad.addColorStop(1, palette.bottom);
 
     ctx.fillStyle = grad;
-    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    drawVariableRoundRect(left, top, width, height, rtl, rtr, rbr, rbl);
     ctx.fill();
 
-    // 内側のハイライト（ポップなツヤ感）
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    drawRoundRect(drawX + 3, drawY + 3, drawSize - 6, (drawSize - 6) / 3, 3);
-    ctx.fill();
+    // ハイライト描画（上面が開いている場合にツヤを表示）
+    if (!hasUp) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        const hlLeft = left + (hasLeft ? 0 : 2);
+        const hlWidth = width - (hasLeft ? 0 : 2) - (hasRight ? 0 : 2);
+        if (hlWidth > 0) {
+            drawVariableRoundRect(hlLeft, top + 2, hlWidth, Math.max(2, height / 3), rtl > 0 ? 3 : 0, rtr > 0 ? 3 : 0, 0, 0);
+            ctx.fill();
+        }
+    }
 
-    // 接続輪郭線（ポップな線画）
+    // 外枠線（隣接ブロックがない外周のみストローク描画）
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
     ctx.lineWidth = 2;
-    drawRoundRect(drawX + 1, drawY + 1, drawSize - 2, drawSize - 2, radius);
+    ctx.beginPath();
+
+    if (!hasUp) {
+        ctx.moveTo(left + rtl, top);
+        ctx.lineTo(right - rtr, top);
+    }
+    if (!hasRight) {
+        ctx.moveTo(right, top + rtr);
+        ctx.lineTo(right, bottom - rbr);
+    }
+    if (!hasDown) {
+        ctx.moveTo(right - rbr, bottom);
+        ctx.lineTo(left + rbl, bottom);
+    }
+    if (!hasLeft) {
+        ctx.moveTo(left, bottom - rbl);
+        ctx.lineTo(left, top + rtl);
+    }
+
+    if (!hasUp && !hasRight && rtr) {
+        ctx.moveTo(right - rtr, top);
+        ctx.quadraticCurveTo(right, top, right, top + rtr);
+    }
+    if (!hasDown && !hasRight && rbr) {
+        ctx.moveTo(right, bottom - rbr);
+        ctx.quadraticCurveTo(right, bottom, right - rbr, bottom);
+    }
+    if (!hasDown && !hasLeft && rbl) {
+        ctx.moveTo(left + rbl, bottom);
+        ctx.quadraticCurveTo(left, bottom, left, bottom - rbl);
+    }
+    if (!hasUp && !hasLeft && rtl) {
+        ctx.moveTo(left, top + rtl);
+        ctx.quadraticCurveTo(left, top, left + rtl, top);
+    }
+
     ctx.stroke();
 }
 
@@ -865,7 +949,7 @@ function drawGame() {
                 } else if (block.type === 'penalty') {
                     drawPenaltyBlock(block, drawX, drawY, drawSize);
                 } else {
-                    drawPopBlock(block, drawX, drawY, drawSize);
+                    drawPopBlock(block, drawX, drawY, drawSize, x, y);
                 }
 
                 ctx.globalAlpha = 1.0;
